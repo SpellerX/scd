@@ -9,11 +9,13 @@ import { invoke } from "@tauri-apps/api/core";
 
 /** Funcionário (espelho do struct Rust `Funcionario`). CPF é opcional. */
 export interface Funcionario {
-  id: number;
+  /** Id UUID — chave única global (sincronização). */
+  id: string;
   nome: string;
   cpf: string | null;
   data_admissao: string | null;
-  empresa_id: number;
+  /** Id UUID da empresa à qual o funcionário está vinculado. */
+  empresa_id: string;
   empresa_nome: string;
   created_at: string;
 }
@@ -48,7 +50,7 @@ export function useFuncionarios() {
   function criar(dados: {
     nome: string;
     cpf: string;
-    empresaId: number;
+    empresaId: string;
     dataAdmissao: string | null;
   }): Promise<Funcionario> {
     return invoke<Funcionario>("criar_funcionario", dados);
@@ -60,7 +62,7 @@ export function useFuncionarios() {
    */
   function importarPlanilha(
     caminho: string,
-    empresaId: number | null,
+    empresaId: string | null,
   ): Promise<RelatorioImportacaoFuncionarios> {
     return invoke<RelatorioImportacaoFuncionarios>("importar_funcionarios_planilha", {
       caminho,
@@ -68,8 +70,8 @@ export function useFuncionarios() {
     });
   }
 
-  /** Exclui um funcionário (pelo id). */
-  function remover(id: number): Promise<void> {
+  /** Exclui um funcionário (pelo id UUID). */
+  function remover(id: string): Promise<void> {
     return invoke<void>("remover_funcionario", { id });
   }
 

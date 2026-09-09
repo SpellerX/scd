@@ -20,7 +20,8 @@ export type IconeMenu =
   | "funcionario"
   | "ferias-vencidas"
   | "ferias-a-vencer"
-  | "usuario";
+  | "usuario"
+  | "sincronizacao";
 
 export interface MenuItem {
   /** Identificador estável da seção (usado na navegação). */
@@ -82,6 +83,12 @@ export const topMenu: MenuGroup[] = [
         label: "Usuários",
         description: "Cadastro e administração dos usuários do SCD.",
         icon: "usuario",
+      },
+      {
+        id: "sistema-sincronizacao",
+        label: "Sincronização",
+        description: "Conta da nuvem que sincroniza os dados entre máquinas.",
+        icon: "sincronizacao",
       },
     ],
   },

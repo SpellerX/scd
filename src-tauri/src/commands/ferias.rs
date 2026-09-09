@@ -5,8 +5,8 @@
 //! SEGUNDA JANELA própria (sem borda, sempre no topo, canto superior
 //! direito) que permanece na tela até o usuário clicar em um botão.
 
-use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use serde::Serialize;
+use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 use crate::{ferias, AppState};
 
@@ -15,14 +15,18 @@ const JANELA_NOTIFICACAO: &str = "notificacao";
 
 /// Comando `listar_ferias_vencidas` — períodos vencidos sem regularizar.
 #[tauri::command]
-pub fn listar_ferias_vencidas(state: State<'_, AppState>) -> Result<Vec<ferias::FeriasVencida>, String> {
+pub fn listar_ferias_vencidas(
+    state: State<'_, AppState>,
+) -> Result<Vec<ferias::FeriasVencida>, String> {
     let db = state.db.lock().unwrap();
     ferias::listar_vencidas(&db)
 }
 
 /// Comando `listar_ferias_a_vencer` — direitos adquiridos dentro do prazo.
 #[tauri::command]
-pub fn listar_ferias_a_vencer(state: State<'_, AppState>) -> Result<Vec<ferias::FeriasAVencer>, String> {
+pub fn listar_ferias_a_vencer(
+    state: State<'_, AppState>,
+) -> Result<Vec<ferias::FeriasAVencer>, String> {
     let db = state.db.lock().unwrap();
     let alerta = ferias::obter_alerta_dias(&db)?;
     ferias::listar_a_vencer(&db, alerta)
@@ -33,11 +37,11 @@ pub fn listar_ferias_a_vencer(state: State<'_, AppState>) -> Result<Vec<ferias::
 #[tauri::command]
 pub fn regularizar_ferias(
     state: State<'_, AppState>,
-    id: i64,
+    id: String,
     observacao: Option<String>,
 ) -> Result<(), String> {
     let db = state.db.lock().unwrap();
-    ferias::regularizar(&db, id, observacao)
+    ferias::regularizar(&db, &id, observacao)
 }
 
 /// Comando `obter_alerta_ferias` — dias de antecedência do alerta.
@@ -118,7 +122,11 @@ pub fn verificar_notificacoes_os(
 
     // Intervalo de reenvio por tipo.
     let intervalo = |tipo: &str| -> u64 {
-        if tipo == "vencida" { REENVIO_VENCIDA_SEG } else { REENVIO_ALERTA_SEG }
+        if tipo == "vencida" {
+            REENVIO_VENCIDA_SEG
+        } else {
+            REENVIO_ALERTA_SEG
+        }
     };
 
     // Primeira pendência: na primeira chamada da execução abre SEMPRE;
@@ -197,7 +205,10 @@ fn abrir_janela_notificacao(app: &tauri::AppHandle) -> Result<usize, String> {
     );
 
     // Posição: canto superior direito do monitor principal (estilo MSN).
-    let (x, y) = match app.get_webview_window("main").and_then(|w| w.current_monitor().ok().flatten()) {
+    let (x, y) = match app
+        .get_webview_window("main")
+        .and_then(|w| w.current_monitor().ok().flatten())
+    {
         Some(monitor) => {
             let largura = monitor.size().width as f64;
             ((largura - 400.0).max(8.0), 12.0)
@@ -213,16 +224,17 @@ fn abrir_janela_notificacao(app: &tauri::AppHandle) -> Result<usize, String> {
         *pronta = false;
     }
 
-    let janela = WebviewWindowBuilder::new(app, JANELA_NOTIFICACAO, WebviewUrl::App("noti.html".into()))
-        .inner_size(388.0, 240.0)
-        .position(x, y)
-        .decorations(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .resizable(false)
-        .title("SCD — Notificação")
-        .build()
-        .map_err(|err| format!("Falha ao abrir a janela de notificação: {err}"))?;
+    let janela =
+        WebviewWindowBuilder::new(app, JANELA_NOTIFICACAO, WebviewUrl::App("noti.html".into()))
+            .inner_size(388.0, 240.0)
+            .position(x, y)
+            .decorations(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .resizable(false)
+            .title("SCD — Notificação")
+            .build()
+            .map_err(|err| format!("Falha ao abrir a janela de notificação: {err}"))?;
 
     let _ = janela.set_focus();
 
@@ -282,8 +294,18 @@ pub fn acao_notificacao(
         salvar_mapa_ultima_vez(&db, &memoria)?;
     } else {
         // regularizar/ver: leva o usuário à página correta no app principal.
-        let secao = if secao.is_empty() { "cadastro-ferias-vencidas" } else { secao.as_str() };
-        let _ = app.emit_to("main", "ir-para-secao", IrParaSecao { secao: secao.to_string() });
+        let secao = if secao.is_empty() {
+            "cadastro-ferias-vencidas"
+        } else {
+            secao.as_str()
+        };
+        let _ = app.emit_to(
+            "main",
+            "ir-para-secao",
+            IrParaSecao {
+                secao: secao.to_string(),
+            },
+        );
     }
 
     fechar_janela(app.clone())?;

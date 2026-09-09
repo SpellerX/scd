@@ -47,6 +47,12 @@ Aplicativo desktop com **Tauri v2** (Rust) + **Vue 3** (TypeScript/Vite) + **Tai
   página de férias vencidas) ou **Lembrar mais tarde** (pausa até o dia
   seguinte). Funciona em dev e no app instalado — não usa o plugin de
   notificação do Tauri
+- **Sincronização opcional com a nuvem (Supabase)** (`Sistema → Sincronização`):
+  uma **conta "dona"** por empresa mantém empresas, funcionários e férias em
+  sincronia entre várias máquinas. O SQLite local continua sendo a fonte da
+  UI (app funciona offline); o app envia as alterações locais e recebe as de
+  outras máquinas a cada ~60 s (last-write-wins). Login local e permissões
+  por módulo não mudam. Veja a seção *Sincronização com a nuvem* abaixo.
 
 ## Estrutura do projeto
 
@@ -101,7 +107,9 @@ scd/
             ├── auth.rs     # login, logout, current_user
             ├── empresas.rs # listar/buscar/salvar/excluir/importar empresas
             ├── funcionarios.rs # listar/criar/excluir/importar funcionários
-            └── usuarios.rs # listar/criar/excluir usuários
+            ├── usuarios.rs # listar/criar/excluir usuários
+            └── sync.rs     # estado/conectar/desconectar/sincronizar (nuvem)
+    └── supabase/schema.sql     # Esquema da nuvem (tabelas espelho + RLS)
 ```
 
 ## Como alterar (padrões do projeto)
@@ -149,6 +157,40 @@ scd/
   e o usuário demo são recriados no próximo início.
 - Credencial demo: usuário `admin`, senha `admin`
   (ver `auth::ensure_demo_user` — remover quando houver cadastro real).
+- Desde o esquema v2, as tabelas sincronizáveis (`companies`, `employees`,
+  `employee_leave_periods`) usam **id UUID**, `updated_at` e `deleted_at`
+  (soft delete) — a migração acontece automaticamente ao abrir o app.
+
+## Sincronização com a nuvem (Supabase)
+
+Sincronizar entre máquinas é **opcional** e feito por **dispositivo**:
+
+1. Crie um projeto no [Supabase](https://supabase.com) e, no **SQL Editor**,
+   execute o conteúdo de `supabase/schema.sql` (tabelas espelho + RLS por dono).
+2. Em **Authentication → Users**, crie a conta (e-mail/senha) da empresa.
+3. No app: **Sistema → Sincronização** → informe a **Project URL** e a
+   **anon key** (Settings → API) + a conta criada → **Conectar e sincronizar**.
+
+O app sincroniza sozinho ao abrir e a cada ~60 s (ou pelo botão
+"Sincronizar agora"). Conflitos usam **last-write-wins** por `updated_at`;
+exclusões são suaves (`deleted_at`), então nada é perdido por quem está
+offline. Credenciais/tokens ficam apenas no dispositivo (tabela `app_settings`).
+
+**Desenvolvimento/teste**: em vez de digitar na tela, copie `.env.example`
+para `.env` (na raiz do projeto) e preencha `SCD_SUPABASE_URL`,
+`SCD_SUPABASE_ANON_KEY`, `SCD_SUPABASE_EMAIL` e `SCD_SUPABASE_SENHA` — se o
+app ainda não tiver conta conectada, a primeira sincronização usa esses dados
+automaticamente. Em produção, cada empresa informa a própria conta pela tela
+(a senha nunca vai em build/instalador).
+
+**Instalador já configurado (usuário não digita nada)**: cadastre no GitHub
+(**Settings → Secrets and variables → Actions**) os secrets
+`SCD_SUPABASE_URL`, `SCD_SUPABASE_ANON_KEY`, `SCD_SUPABASE_EMAIL` e
+`SCD_SUPABASE_SENHA`. O workflow de release os injeta no build como
+`SCD_EMBUTIDO_*`, que o código lê na compilação (`option_env!`) — no primeiro
+uso em qualquer máquina o app conecta e sincroniza sozinho (sem `.env`, sem
+tela). Use apenas em distribuição privada: quem tiver o instalador consegue
+extrair esses dados.
 
 ## Comandos úteis
 

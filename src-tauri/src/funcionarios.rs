@@ -13,11 +13,13 @@ use crate::cnpj;
 /// Funcionário devolvido ao frontend (já com o nome da empresa vinculada).
 #[derive(Debug, Clone, Serialize)]
 pub struct Funcionario {
-    pub id: i64,
+    /// Id UUID (TEXT) — chave única global (sincronização com a nuvem).
+    pub id: String,
     pub nome: String,
     pub cpf: Option<String>,
     pub data_admissao: Option<String>,
-    pub empresa_id: i64,
+    /// Id UUID da empresa à qual o funcionário está vinculado.
+    pub empresa_id: String,
     pub empresa_nome: String,
     pub created_at: String,
 }
@@ -42,6 +44,7 @@ pub struct ErroImportacaoLinha {
 }
 
 /// Lista os funcionários (ordenados pelo nome), com o nome da empresa.
+/// Exclui os apagados (soft delete) e os de empresas apagadas.
 pub fn listar(conn: &Connection) -> Result<Vec<Funcionario>, String> {
     let mut stmt = conn
         .prepare(
@@ -49,6 +52,8 @@ pub fn listar(conn: &Connection) -> Result<Vec<Funcionario>, String> {
                     f.created_at
                FROM employees f
                JOIN companies c ON c.id = f.empresa_id
+              WHERE f.deleted_at IS NULL
+                AND c.deleted_at IS NULL
               ORDER BY f.nome COLLATE NOCASE",
         )
         .map_err(|err| format!("Falha ao preparar a consulta de funcionários: {err}"))?;
@@ -68,7 +73,7 @@ pub fn inserir(
     conn: &Connection,
     nome: &str,
     cpf: &str,
-    empresa_id: i64,
+    empresa_id: &str,
     data_admissao: Option<String>,
 ) -> Result<Funcionario, String> {
     let nome = nome.trim();
@@ -90,10 +95,12 @@ pub fn inserir(
         return Err(format!("Data de admissão inválida: {data_admissao}."));
     }
 
+    // Id UUID gerado aqui (chave única global para a sincronização).
+    let id = uuid::Uuid::new_v4().to_string();
     conn.execute(
-        "INSERT INTO employees (nome, cpf, data_admissao, empresa_id)
-         VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![nome, cpf, data_admissao, empresa_id],
+        "INSERT INTO employees (id, nome, cpf, data_admissao, empresa_id)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![id, nome, cpf, data_admissao, empresa_id],
     )
     .map_err(|err| {
         if cpf_duplicado(&err) {
@@ -103,32 +110,51 @@ pub fn inserir(
         }
     })?;
 
-    buscar_por_cpf_ou_id_do_insert(conn).and_then(|funcionario| {
+    buscar_por_id(conn, &id).and_then(|funcionario| {
         // Gera automaticamente os períodos de férias a partir da admissão
         // (cadastro manual e importação passam por aqui).
         if let Some(admissao) = &funcionario.data_admissao {
-            crate::ferias::gerar_periodos_do_funcionario(conn, funcionario.id, admissao)?;
+            crate::ferias::gerar_periodos_do_funcionario(conn, &funcionario.id, admissao)?;
         }
         Ok(funcionario)
     })
 }
 
-/// Remove um funcionário pelo id.
-pub fn remover(conn: &Connection, id: i64) -> Result<(), String> {
+/// Remove um funcionário pelo id (soft delete: marca `deleted_at` nele e nos
+/// períodos de férias dele, para a remoção poder ser sincronizada depois).
+pub fn remover(conn: &Connection, id: &str) -> Result<(), String> {
     let removidos = conn
-        .execute("DELETE FROM employees WHERE id = ?1", [id])
+        .execute(
+            "UPDATE employees
+                SET deleted_at = datetime('now'),
+                    updated_at = datetime('now')
+              WHERE id = ?1 AND deleted_at IS NULL",
+            [id],
+        )
         .map_err(|err| format!("Falha ao excluir o funcionário: {err}"))?;
 
     if removidos == 0 {
         return Err("Funcionário não encontrado ou já removido.".to_string());
     }
+
+    // Acompanha os períodos de férias do funcionário (soft delete em cascata).
+    conn.execute(
+        "UPDATE employee_leave_periods
+            SET deleted_at = datetime('now'),
+                updated_at = datetime('now')
+          WHERE employee_id = ?1 AND deleted_at IS NULL",
+        [id],
+    )
+    .map_err(|err| format!("Falha ao excluir as férias do funcionário: {err}"))?;
+
     Ok(())
 }
 
-/// A empresa tem funcionários vinculados? (usado ao tentar excluir empresas)
-pub fn empresa_tem_funcionarios(conn: &Connection, empresa_id: i64) -> Result<bool, String> {
+/// A empresa tem funcionários vinculados ATIVOS? (usado ao excluir empresas)
+pub fn empresa_tem_funcionarios(conn: &Connection, empresa_id: &str) -> Result<bool, String> {
     conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM employees WHERE empresa_id = ?1)",
+        "SELECT EXISTS(SELECT 1 FROM employees
+                        WHERE empresa_id = ?1 AND deleted_at IS NULL)",
         [empresa_id],
         |linha| linha.get(0),
     )
@@ -150,12 +176,13 @@ pub fn empresa_tem_funcionarios(conn: &Connection, empresa_id: i64) -> Result<bo
 pub fn importar_linhas(
     conn: &Connection,
     linhas: &[Vec<String>],
-    empresa_padrao: Option<i64>,
+    empresa_padrao: Option<String>,
 ) -> Result<RelatorioImportacaoFuncionarios, String> {
     let cabecalho = &linhas[0];
 
-    let col_nome = achar_coluna(cabecalho, &["nome"])
-        .ok_or_else(|| "Planilha sem coluna de Nome (cabeçalho deve conter \"nome\").".to_string())?;
+    let col_nome = achar_coluna(cabecalho, &["nome"]).ok_or_else(|| {
+        "Planilha sem coluna de Nome (cabeçalho deve conter \"nome\").".to_string()
+    })?;
     let col_cpf = achar_coluna(cabecalho, &["cpf"]);
     let col_admissao = achar_coluna(cabecalho, &["admiss"]).ok_or_else(|| {
         "Planilha sem coluna de Admissão (cabeçalho deve conter \"admissão\" ou \"admissao\")."
@@ -187,20 +214,25 @@ pub fn importar_linhas(
         relatorio.total += 1;
 
         // 1) Descobre a empresa da linha (CNPJ por linha > empresa padrão)
-        let empresa_id = match resolver_empresa_da_linha(conn, linha, col_cnpj, empresa_padrao) {
-            Ok(Some(id)) => id,
-            Ok(None) => {
-                relatorio.erros.push(ErroImportacaoLinha {
-                    linha: numero_linha,
-                    motivo: "Linha sem empresa (informe o CNPJ ou a empresa padrão).".to_string(),
-                });
-                continue;
-            }
-            Err(motivo) => {
-                relatorio.erros.push(ErroImportacaoLinha { linha: numero_linha, motivo });
-                continue;
-            }
-        };
+        let empresa_id =
+            match resolver_empresa_da_linha(conn, linha, col_cnpj, empresa_padrao.as_deref()) {
+                Ok(Some(id)) => id,
+                Ok(None) => {
+                    relatorio.erros.push(ErroImportacaoLinha {
+                        linha: numero_linha,
+                        motivo: "Linha sem empresa (informe o CNPJ ou a empresa padrão)."
+                            .to_string(),
+                    });
+                    continue;
+                }
+                Err(motivo) => {
+                    relatorio.erros.push(ErroImportacaoLinha {
+                        linha: numero_linha,
+                        motivo,
+                    });
+                    continue;
+                }
+            };
 
         // 2) CPF (opcional) — valida aqui para gerar erro de linha amigável
         //    (a inserção valida de novo internamente).
@@ -209,7 +241,10 @@ pub fn importar_linhas(
             .cloned()
             .unwrap_or_default();
         if let Err(motivo) = validar_cpf(&cpf_celula) {
-            relatorio.erros.push(ErroImportacaoLinha { linha: numero_linha, motivo });
+            relatorio.erros.push(ErroImportacaoLinha {
+                linha: numero_linha,
+                motivo,
+            });
             continue;
         }
 
@@ -235,11 +270,12 @@ pub fn importar_linhas(
         };
 
         // 4) Cadastra
-        match inserir(conn, &nome, &cpf_celula, empresa_id, Some(data_admissao)) {
+        match inserir(conn, &nome, &cpf_celula, &empresa_id, Some(data_admissao)) {
             Ok(_) => relatorio.criados += 1,
-            Err(motivo) => relatorio
-                .erros
-                .push(ErroImportacaoLinha { linha: numero_linha, motivo }),
+            Err(motivo) => relatorio.erros.push(ErroImportacaoLinha {
+                linha: numero_linha,
+                motivo,
+            }),
         }
     }
 
@@ -247,20 +283,21 @@ pub fn importar_linhas(
 }
 
 /// Resolve a empresa de uma linha: coluna de CNPJ (se houver e preenchida)
-/// ou a empresa padrão escolhida na tela.
+/// ou a empresa padrão escolhida na tela. Devolve o id UUID da empresa.
 fn resolver_empresa_da_linha(
     conn: &Connection,
     linha: &[String],
     col_cnpj: Option<usize>,
-    empresa_padrao: Option<i64>,
-) -> Result<Option<i64>, String> {
+    empresa_padrao: Option<&str>,
+) -> Result<Option<String>, String> {
     if let Some(coluna) = col_cnpj {
         let cnpj_celula = linha.get(coluna).cloned().unwrap_or_default();
         if !cnpj_celula.trim().is_empty() {
             let cnpj = cnpj::normalizar_cnpj(&cnpj_celula)?;
-            let empresa_id: Option<i64> = conn
+            let empresa_id: Option<String> = conn
                 .query_row(
-                    "SELECT id FROM companies WHERE cnpj = ?1",
+                    "SELECT id FROM companies
+                      WHERE cnpj = ?1 AND deleted_at IS NULL",
                     [&cnpj],
                     |l| l.get(0),
                 )
@@ -275,7 +312,7 @@ fn resolver_empresa_da_linha(
             };
         }
     }
-    Ok(empresa_padrao)
+    Ok(empresa_padrao.map(str::to_string))
 }
 
 /// Acha o índice da coluna cujo cabeçalho contenha alguma das palavras.
@@ -288,17 +325,21 @@ fn achar_coluna(cabecalho: &[String], palavras: &[&str]) -> Option<usize> {
 
 // ═══════════════════ Helpers (validação e datas) ════════════════════════════
 
-/// Confere se a empresa existe (FK bloquearia, mas o erro amigável é melhor).
-fn conferir_empresa(conn: &Connection, empresa_id: i64) -> Result<(), String> {
+/// Confere se a empresa existe e está ativa (FK bloquearia, mas o erro
+/// amigável é melhor).
+fn conferir_empresa(conn: &Connection, empresa_id: &str) -> Result<(), String> {
     let existe: bool = conn
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM companies WHERE id = ?1)",
+            "SELECT EXISTS(SELECT 1 FROM companies
+                            WHERE id = ?1 AND deleted_at IS NULL)",
             [empresa_id],
             |linha| linha.get(0),
         )
         .map_err(|err| format!("Falha ao conferir a empresa: {err}"))?;
     if !existe {
-        return Err("A empresa escolhida não existe. Atualize a lista e tente de novo.".to_string());
+        return Err(
+            "A empresa escolhida não existe. Atualize a lista e tente de novo.".to_string(),
+        );
     }
     Ok(())
 }
@@ -379,11 +420,15 @@ fn data_de_celula(celula: &str) -> Option<String> {
     if partes.len() == 3 {
         let numero = |p: &str| p.parse::<u32>().ok();
         match (numero(partes[0]), numero(partes[1]), numero(partes[2])) {
-            (Some(dia), Some(mes), Some(ano)) if ano > 1000 && (1..=31).contains(&dia) && (1..=12).contains(&mes) => {
+            (Some(dia), Some(mes), Some(ano))
+                if ano > 1000 && (1..=31).contains(&dia) && (1..=12).contains(&mes) =>
+            {
                 return Some(format!("{ano:04}-{mes:02}-{dia:02}"));
             }
             // ISO (aaaa-mm-dd)
-            (Some(ano), Some(mes), Some(dia)) if ano > 1000 && (1..=12).contains(&mes) && (1..=31).contains(&dia) => {
+            (Some(ano), Some(mes), Some(dia))
+                if ano > 1000 && (1..=12).contains(&mes) && (1..=31).contains(&dia) =>
+            {
                 return Some(format!("{ano:04}-{mes:02}-{dia:02}"));
             }
             _ => {}
@@ -446,15 +491,15 @@ fn funcionario_da_linha(linha: &rusqlite::Row) -> rusqlite::Result<Funcionario> 
     })
 }
 
-/// Busca o funcionário recém-inserido (o último id da conexão).
-fn buscar_por_cpf_ou_id_do_insert(conn: &Connection) -> Result<Funcionario, String> {
+/// Busca um funcionário pelo id UUID (recém-inserido ou não).
+fn buscar_por_id(conn: &Connection, id: &str) -> Result<Funcionario, String> {
     conn.query_row(
         "SELECT f.id, f.nome, f.cpf, f.data_admissao, f.empresa_id, c.razao_social,
                 f.created_at
            FROM employees f
            JOIN companies c ON c.id = f.empresa_id
-          WHERE f.id = ?1",
-        [conn.last_insert_rowid()],
+          WHERE f.id = ?1 AND f.deleted_at IS NULL",
+        [id],
         funcionario_da_linha,
     )
     .optional()

@@ -8,4 +8,5 @@ pub mod auth;
 pub mod empresas;
 pub mod ferias;
 pub mod funcionarios;
+pub mod sync;
 pub mod usuarios;

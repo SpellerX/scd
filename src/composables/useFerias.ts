@@ -8,8 +8,9 @@ import { invoke } from "@tauri-apps/api/core";
 
 /** Período vencido (espelho de `FeriasVencida`). */
 export interface FeriasVencida {
-  id: number;
-  funcionario_id: number;
+  /** Id UUID do período — chave única global. */
+  id: string;
+  funcionario_id: string;
   funcionario_nome: string;
   empresa_nome: string;
   inicio: string;
@@ -20,8 +21,9 @@ export interface FeriasVencida {
 
 /** Período a vencer (espelho de `FeriasAVencer`). */
 export interface FeriasAVencer {
-  id: number;
-  funcionario_id: number;
+  /** Id UUID do período — chave única global. */
+  id: string;
+  funcionario_id: string;
   funcionario_nome: string;
   empresa_nome: string;
   inicio: string;
@@ -55,7 +57,7 @@ export function useFerias() {
   }
 
   /** Registra que o funcionário já gozou/quitou o período vencido. */
-  function regularizar(id: number, observacao: string | null): Promise<void> {
+  function regularizar(id: string, observacao: string | null): Promise<void> {
     return invoke<void>("regularizar_ferias", { id, observacao });
   }
 

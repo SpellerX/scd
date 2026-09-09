@@ -14,7 +14,8 @@ use crate::cnpj::{self, DadosEmpresa};
 /// Empresa cadastrada, devolvida ao frontend.
 #[derive(Debug, Clone, Serialize)]
 pub struct Empresa {
-    pub id: i64,
+    /// Id UUID (TEXT) — chave única global (sincronização com a nuvem).
+    pub id: String,
     pub cnpj: String,
     pub razao_social: String,
     pub nome_fantasia: Option<String>,
@@ -54,13 +55,14 @@ pub struct ProgressoImportacao {
     pub total: usize,
 }
 
-/// Lista as empresas cadastradas (ordenadas pelo nome).
+/// Lista as empresas cadastradas (ordenadas pelo nome; exclui as apagadas).
 pub fn listar(conn: &Connection) -> Result<Vec<Empresa>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, cnpj, razao_social, nome_fantasia, situacao, municipio,
                     uf, telefone, email, created_at
                FROM companies
+              WHERE deleted_at IS NULL
               ORDER BY razao_social COLLATE NOCASE",
         )
         .map_err(|err| format!("Falha ao preparar a consulta: {err}"))?;
@@ -74,17 +76,21 @@ pub fn listar(conn: &Connection) -> Result<Vec<Empresa>, String> {
     Ok(empresas)
 }
 
-/// Confere se um CNPJ (normalizado) já está cadastrado.
+/// Confere se um CNPJ (normalizado) já está cadastrado (entre os ativos).
 pub fn existe(conn: &Connection, cnpj: &str) -> Result<bool, String> {
-    conn.query_row("SELECT 1 FROM companies WHERE cnpj = ?1", [cnpj], |_| Ok(()))
-        .optional()
-        .map(|opt| opt.is_some())
-        .map_err(|err| format!("Falha ao consultar o CNPJ: {err}"))
+    conn.query_row(
+        "SELECT 1 FROM companies WHERE cnpj = ?1 AND deleted_at IS NULL",
+        [cnpj],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|opt| opt.is_some())
+    .map_err(|err| format!("Falha ao consultar o CNPJ: {err}"))
 }
 
-/// Remove uma empresa cadastrada pelo id.
+/// Remove uma empresa cadastrada pelo id (soft delete: marca `deleted_at`).
 /// Recusa se a empresa tiver funcionários vinculados ou se o id não existir.
-pub fn remover(conn: &Connection, id: i64) -> Result<(), String> {
+pub fn remover(conn: &Connection, id: &str) -> Result<(), String> {
     if crate::funcionarios::empresa_tem_funcionarios(conn, id)? {
         return Err(
             "Esta empresa possui funcionários vinculados. Exclua ou mova os funcionários antes."
@@ -93,7 +99,13 @@ pub fn remover(conn: &Connection, id: i64) -> Result<(), String> {
     }
 
     let removidas = conn
-        .execute("DELETE FROM companies WHERE id = ?1", [id])
+        .execute(
+            "UPDATE companies
+                SET deleted_at = datetime('now'),
+                    updated_at = datetime('now')
+              WHERE id = ?1 AND deleted_at IS NULL",
+            [id],
+        )
         .map_err(|err| format!("Falha ao excluir a empresa: {err}"))?;
 
     if removidas == 0 {
@@ -111,12 +123,15 @@ pub struct ResultadoRemocao {
     pub bloqueadas: usize,
 }
 
-/// Remove várias empresas de uma vez (exclusão em lote).
+/// Remove várias empresas de uma vez (exclusão em lote, soft delete).
 /// Empresas com funcionários vinculados são **puladas** (não quebram o lote);
 /// tudo roda numa única transação.
-pub fn remover_varias(conn: &mut Connection, ids: &[i64]) -> Result<ResultadoRemocao, String> {
+pub fn remover_varias(conn: &mut Connection, ids: &[String]) -> Result<ResultadoRemocao, String> {
     if ids.is_empty() {
-        return Ok(ResultadoRemocao { removidas: 0, bloqueadas: 0 });
+        return Ok(ResultadoRemocao {
+            removidas: 0,
+            bloqueadas: 0,
+        });
     }
 
     let transacao = conn
@@ -126,14 +141,20 @@ pub fn remover_varias(conn: &mut Connection, ids: &[i64]) -> Result<ResultadoRem
     let mut removidas = 0usize;
     let mut bloqueadas = 0usize;
 
-    for &id in ids {
+    for id in ids {
         if crate::funcionarios::empresa_tem_funcionarios(&transacao, id)? {
             bloqueadas += 1;
             continue;
         }
 
         let excluida = transacao
-            .execute("DELETE FROM companies WHERE id = ?1", [id])
+            .execute(
+                "UPDATE companies
+                    SET deleted_at = datetime('now'),
+                        updated_at = datetime('now')
+                  WHERE id = ?1 AND deleted_at IS NULL",
+                [id],
+            )
             .map_err(|err| format!("Falha ao excluir a empresa {id}: {err}"))?;
 
         if excluida == 0 {
@@ -147,16 +168,22 @@ pub fn remover_varias(conn: &mut Connection, ids: &[i64]) -> Result<ResultadoRem
         .commit()
         .map_err(|err| format!("Falha ao finalizar a exclusão em lote: {err}"))?;
 
-    Ok(ResultadoRemocao { removidas, bloqueadas })
+    Ok(ResultadoRemocao {
+        removidas,
+        bloqueadas,
+    })
 }
 
 /// Grava uma empresa nova (CNPJ já deve ter sido conferido como inexistente).
+/// O id UUID é gerado aqui (chave única global para a sincronização).
 pub fn inserir(conn: &Connection, dados: &DadosEmpresa) -> Result<Empresa, String> {
+    let id = uuid::Uuid::new_v4().to_string();
     conn.execute(
         "INSERT INTO companies
-            (cnpj, razao_social, nome_fantasia, situacao, municipio, uf, telefone, email)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            (id, cnpj, razao_social, nome_fantasia, situacao, municipio, uf, telefone, email)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         rusqlite::params![
+            id,
             dados.cnpj,
             dados.razao_social,
             dados.nome_fantasia,
@@ -169,15 +196,15 @@ pub fn inserir(conn: &Connection, dados: &DadosEmpresa) -> Result<Empresa, Strin
     )
     .map_err(|err| format!("Falha ao salvar a empresa: {err}"))?;
 
-    buscar_por_id(conn, conn.last_insert_rowid())
+    buscar_por_id(conn, &id)
 }
 
 /// Busca uma empresa pelo id (usado logo após o INSERT).
-fn buscar_por_id(conn: &Connection, id: i64) -> Result<Empresa, String> {
+fn buscar_por_id(conn: &Connection, id: &str) -> Result<Empresa, String> {
     conn.query_row(
         "SELECT id, cnpj, razao_social, nome_fantasia, situacao, municipio,
                 uf, telefone, email, created_at
-           FROM companies WHERE id = ?1",
+           FROM companies WHERE id = ?1 AND deleted_at IS NULL",
         [id],
         empresa_da_linha,
     )
@@ -262,8 +289,9 @@ where
     let total_linhas = linhas.len().saturating_sub(1);
 
     // Localiza as colunas pelo nome (case-insensitive).
-    let col_cnpj = achar_coluna(cabecalho, &["cnpj"])
-        .ok_or_else(|| "Planilha sem coluna de CNPJ (cabeçalho deve conter \"cnpj\").".to_string())?;
+    let col_cnpj = achar_coluna(cabecalho, &["cnpj"]).ok_or_else(|| {
+        "Planilha sem coluna de CNPJ (cabeçalho deve conter \"cnpj\").".to_string()
+    })?;
     let col_razao = achar_coluna(cabecalho, &["raz"]);
     let col_fantasia = achar_coluna(cabecalho, &["fantas"]);
 
@@ -295,7 +323,10 @@ where
                 if cnpj_celula.trim().is_empty() {
                     continue;
                 }
-                relatorio.erros.push(ErroImportacao { linha: numero_linha, motivo });
+                relatorio.erros.push(ErroImportacao {
+                    linha: numero_linha,
+                    motivo,
+                });
                 continue;
             }
         };
@@ -331,9 +362,10 @@ where
             match cnpj::buscar_por_cnpj(http, &cnpj).await {
                 Ok(dados) => dados,
                 Err(motivo) => {
-                    relatorio
-                        .erros
-                        .push(ErroImportacao { linha: numero_linha, motivo });
+                    relatorio.erros.push(ErroImportacao {
+                        linha: numero_linha,
+                        motivo,
+                    });
                     continue;
                 }
             }
@@ -354,9 +386,10 @@ where
         let dados = match normalizar_dados(dados) {
             Ok(dados) => dados,
             Err(motivo) => {
-                relatorio
-                    .erros
-                    .push(ErroImportacao { linha: numero_linha, motivo });
+                relatorio.erros.push(ErroImportacao {
+                    linha: numero_linha,
+                    motivo,
+                });
                 continue;
             }
         };
@@ -364,9 +397,10 @@ where
         let conn = db.lock().unwrap();
         match inserir(&conn, &dados) {
             Ok(_) => relatorio.criadas += 1,
-            Err(motivo) => relatorio
-                .erros
-                .push(ErroImportacao { linha: numero_linha, motivo }),
+            Err(motivo) => relatorio.erros.push(ErroImportacao {
+                linha: numero_linha,
+                motivo,
+            }),
         }
     }
 
@@ -394,11 +428,18 @@ fn normalizar_cnpj_planilha(celula: &str) -> Result<String, String> {
         14 => digitos,
         // Zeros à esquerda podem ter sido "comidos" pela célula numérica.
         12 | 13 => format!("{:0>14}", digitos),
-        _ => return Err(format!("CNPJ com {} dígito(s) — esperado 14.", digitos.len())),
+        _ => {
+            return Err(format!(
+                "CNPJ com {} dígito(s) — esperado 14.",
+                digitos.len()
+            ))
+        }
     };
 
     if !crate::cnpj::validar_cnpj(&normalizado) {
-        return Err(format!("CNPJ {celula} inválido (dígitos verificadores não conferem)."));
+        return Err(format!(
+            "CNPJ {celula} inválido (dígitos verificadores não conferem)."
+        ));
     }
     Ok(normalizado)
 }

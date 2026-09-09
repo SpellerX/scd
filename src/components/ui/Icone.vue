@@ -56,6 +56,10 @@ const CONTEUDO: Record<IconeNome, string> = {
     <path d="M12 12.75a3.25 3.25 0 1 0-3.25-3.25A3.25 3.25 0 0 0 12 12.75Z"/>
     <path d="M5.25 19.75a6.75 6.75 0 0 1 13.5 0"/>
     <path d="M19.5 2.75v4M17.5 4.75h4"/>`,
+  // Duas setas circulares (sincronização com a nuvem)
+  sincronizacao: `
+    <path d="M20 11.5A8.5 8.5 0 0 0 5.6 7.2L3.75 9.25M4 12.5A8.5 8.5 0 0 0 18.4 16.8l1.85-2.05"/>
+    <path d="M3.75 5.5v3.75h3.75M20.25 18.5v-3.75h-3.75"/>`,
 };
 </script>
 

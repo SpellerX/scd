@@ -14,7 +14,7 @@ const { criar, listar: listarFuncionarios } = useFuncionarios();
 
 const nome = ref("");
 const digitosCpf = ref("");
-const empresaId = ref<number | null>(null);
+const empresaId = ref<string | null>(null);
 const dataAdmissao = ref("");
 
 const salvando = ref(false);

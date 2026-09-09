@@ -13,11 +13,11 @@ const { empresas, carregandoLista, erroLista, remover, removerVarias, listar } =
 
 /** Modo de seleção em lote (checkboxes visíveis). */
 const modoSelecao = ref(false);
-/** Ids das empresas marcadas. */
-const selecionadas = ref<number[]>([]);
+/** Ids (UUID) das empresas marcadas. */
+const selecionadas = ref<string[]>([]);
 
 /** id da empresa com exclusão individual em andamento. */
-const removendoId = ref<number | null>(null);
+const removendoId = ref<string | null>(null);
 /** Exclusão em lote em andamento. */
 const removendoEmLote = ref(false);
 /** Erro de exclusão (individual ou em lote). */
@@ -33,7 +33,7 @@ function alternarModoSelecao() {
   if (!modoSelecao.value) selecionadas.value = [];
 }
 
-function alternarSelecao(id: number) {
+function alternarSelecao(id: string) {
   const indice = selecionadas.value.indexOf(id);
   if (indice === -1) {
     selecionadas.value.push(id);

@@ -6,6 +6,11 @@
 #      variables → Actions):
 #        - TAURI_SIGNING_PRIVATE_KEY        (conteúdo do arquivo scd-updater.key)
 #        - TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+#        - SCD_SUPABASE_URL / SCD_SUPABASE_ANON_KEY / SCD_SUPABASE_EMAIL /
+#          SCD_SUPABASE_SENHA  (configuração da nuvem — fica EMBUTIDA no
+#          instalador; quem instalar não digita nada. Distribua apenas em
+#          ambiente privado, pois quem tiver o instalador consegue extrair
+#          esses dados.)
 #   2) Para cada versão: defina a versão em package.json/Cargo.toml/tauri.conf.json
 #      e crie a tag:  git tag v0.1.1 && git push origin v0.1.1
 #
@@ -45,12 +50,18 @@ jobs:
 
       # Compila em modo release, gera instalador + .sig e cria/publica a
       # release (não-draft, não-prerelease) com latest.json para o updater.
+      # As variáveis SCD_EMBUTIDO_* são lidas do código no momento da
+      # compilação (option_env!) — os secrets ficam só no GitHub.
       - name: Build e publicação da release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          SCD_EMBUTIDO_SUPABASE_URL: ${{ secrets.SCD_SUPABASE_URL }}
+          SCD_EMBUTIDO_SUPABASE_ANON_KEY: ${{ secrets.SCD_SUPABASE_ANON_KEY }}
+          SCD_EMBUTIDO_SUPABASE_EMAIL: ${{ secrets.SCD_SUPABASE_EMAIL }}
+          SCD_EMBUTIDO_SUPABASE_SENHA: ${{ secrets.SCD_SUPABASE_SENHA }}
         with:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: "SCD ${{ inputs.tag || github.ref_name }}"

@@ -10,7 +10,7 @@ import { useFuncionarios, type Funcionario } from "../../composables/useFunciona
 
 const { funcionarios, carregandoLista, erroLista, remover, listar } = useFuncionarios();
 
-const removendoId = ref<number | null>(null);
+const removendoId = ref<string | null>(null);
 const erroExcluir = ref<string | null>(null);
 
 async function excluir(funcionario: Funcionario) {

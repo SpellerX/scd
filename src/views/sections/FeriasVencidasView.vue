@@ -11,7 +11,7 @@ import { useNotificacoes } from "../../composables/useNotificacoes";
 const { vencidas, carregando, erro, carregar, regularizar } = useFerias();
 const { carregar: carregarNotificacoes } = useNotificacoes();
 
-const linhaEmEdicao = ref<number | null>(null);
+const linhaEmEdicao = ref<string | null>(null);
 const observacao = ref("");
 const salvando = ref(false);
 const erroAcao = ref<string | null>(null);
@@ -21,14 +21,14 @@ onMounted(() => {
   void carregar();
 });
 
-function iniciarEdicao(id: number) {
+function iniciarEdicao(id: string) {
   erroAcao.value = null;
   sucesso.value = null;
   observacao.value = "";
   linhaEmEdicao.value = id;
 }
 
-async function confirmarRegularizacao(id: number) {
+async function confirmarRegularizacao(id: string) {
   erroAcao.value = null;
   salvando.value = true;
   try {

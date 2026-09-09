@@ -7,7 +7,9 @@ use crate::{funcionarios, AppState};
 
 /// Comando `listar_funcionarios` — todos os funcionários (com a empresa).
 #[tauri::command]
-pub fn listar_funcionarios(state: State<'_, AppState>) -> Result<Vec<funcionarios::Funcionario>, String> {
+pub fn listar_funcionarios(
+    state: State<'_, AppState>,
+) -> Result<Vec<funcionarios::Funcionario>, String> {
     let db = state.db.lock().unwrap();
     funcionarios::listar(&db)
 }
@@ -19,11 +21,11 @@ pub fn criar_funcionario(
     state: State<'_, AppState>,
     nome: String,
     cpf: String,
-    empresa_id: i64,
+    empresa_id: String,
     data_admissao: Option<String>,
 ) -> Result<funcionarios::Funcionario, String> {
     let db = state.db.lock().unwrap();
-    funcionarios::inserir(&db, &nome, &cpf, empresa_id, data_admissao)
+    funcionarios::inserir(&db, &nome, &cpf, &empresa_id, data_admissao)
 }
 
 /// Comando `importar_funcionarios_planilha` — importa funcionários de um
@@ -33,7 +35,7 @@ pub fn criar_funcionario(
 pub fn importar_funcionarios_planilha(
     state: State<'_, AppState>,
     caminho: String,
-    empresa_id: Option<i64>,
+    empresa_id: Option<String>,
 ) -> Result<funcionarios::RelatorioImportacaoFuncionarios, String> {
     let linhas = crate::planilha::ler_primeira_aba(&caminho)?;
 
@@ -47,7 +49,7 @@ pub fn importar_funcionarios_planilha(
 
 /// Comando `remover_funcionario` — exclui um funcionário pelo id.
 #[tauri::command]
-pub fn remover_funcionario(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+pub fn remover_funcionario(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let db = state.db.lock().unwrap();
-    funcionarios::remover(&db, id)
+    funcionarios::remover(&db, &id)
 }

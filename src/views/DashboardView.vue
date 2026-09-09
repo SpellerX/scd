@@ -13,6 +13,7 @@ import { topMenu } from "../config/menu";
 import { useAuth } from "../composables/useAuth";
 import { useNavigation } from "../composables/useNavigation";
 import { usePermissoes } from "../composables/usePermissoes";
+import { useSync } from "../composables/useSync";
 import TopMenu from "../components/navigation/TopMenu.vue";
 import NotificacoesSino from "../components/navigation/NotificacoesSino.vue";
 import AvisoFeriasVencidas from "../components/ferias/AvisoFeriasVencidas.vue";
@@ -22,10 +23,12 @@ import FuncionariosView from "./sections/FuncionariosView.vue";
 import UsuariosView from "./sections/UsuariosView.vue";
 import FeriasVencidasView from "./sections/FeriasVencidasView.vue";
 import FeriasAVencerView from "./sections/FeriasAVencerView.vue";
+import SincronizacaoView from "./sections/SincronizacaoView.vue";
 
 const { currentUser, logout } = useAuth();
 const { activeSection, goHome, openSection } = useNavigation();
 const { usuarioAdmin, pronto: permissoesProntas, secoesPermitidas, pode } = usePermissoes();
+const { verificarEExecutar: sincronizarSeConectado } = useSync();
 
 /** Usuário logado não é admin e não tem nenhum módulo liberado ainda. */
 const semModulosLiberados = computed(
@@ -58,6 +61,7 @@ const telasDasSecoes: Record<string, Component> = {
   "cadastro-ferias-vencidas": FeriasVencidasView,
   "ferias-a-vencer": FeriasAVencerView,
   "sistema-usuarios": UsuariosView,
+  "sistema-sincronizacao": SincronizacaoView,
 };
 
 /** Seção ativa que o usuário realmente pode ver (senão volta ao dashboard). */
@@ -75,6 +79,12 @@ const secaoComponent = computed<Component | null>(() => {
 // Evento vindo da JANELA DE NOTIFICAÇÃO (ou de outros pontos): navega para a
 // seção correta, ex.: clicou em "Regularizar agora" → abre Férias vencidas.
 let desinscreverEvento: (() => void) | undefined;
+let timerSincronizacao: number | undefined;
+
+// Auto-sincronização com a nuvem: enquanto o app estiver aberto, tenta um
+// ciclo a cada 60 s (sem conta conectada, o comando não faz nada).
+const INTERVALO_SINCRONIZACAO_MS = 60_000;
+
 onMounted(() => {
   void listen<{ secao: string }>("ir-para-secao", (evento) => {
     const item = topMenu.flatMap((grupo) => grupo.items).find((i) => i.id === evento.payload.secao);
@@ -82,9 +92,16 @@ onMounted(() => {
   }).then((desinscrever) => {
     desinscreverEvento = desinscrever;
   });
+
+  // Primeira checagem logo ao entrar; depois em intervalos regulares.
+  void sincronizarSeConectado();
+  timerSincronizacao = window.setInterval(() => {
+    void sincronizarSeConectado();
+  }, INTERVALO_SINCRONIZACAO_MS);
 });
 onUnmounted(() => {
   desinscreverEvento?.();
+  if (timerSincronizacao !== undefined) window.clearInterval(timerSincronizacao);
 });
 </script>
 

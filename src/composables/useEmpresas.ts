@@ -9,7 +9,8 @@ import { invoke } from "@tauri-apps/api/core";
 
 /** Empresa cadastrada no banco (espelho do struct Rust `Empresa`). */
 export interface Empresa {
-  id: number;
+  /** Id UUID — chave única global (necessária para a sincronização). */
+  id: string;
   cnpj: string;
   razao_social: string;
   nome_fantasia: string | null;
@@ -75,13 +76,13 @@ export function useEmpresas() {
     return invoke<RelatorioImportacao>("importar_empresas_planilha", { caminho });
   }
 
-  /** Exclui uma empresa cadastrada (pelo id). */
-  function remover(id: number): Promise<void> {
+  /** Exclui uma empresa cadastrada (pelo id UUID). */
+  function remover(id: string): Promise<void> {
     return invoke<void>("remover_empresa", { id });
   }
 
-  /** Exclui várias empresas de uma vez (ids das linhas selecionadas). */
-  function removerVarias(ids: number[]): Promise<ResultadoRemocao> {
+  /** Exclui várias empresas de uma vez (ids UUID das linhas selecionadas). */
+  function removerVarias(ids: string[]): Promise<ResultadoRemocao> {
     return invoke<ResultadoRemocao>("remover_empresas", { ids });
   }
 

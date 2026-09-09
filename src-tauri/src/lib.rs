@@ -10,6 +10,7 @@ mod empresas;
 mod ferias;
 mod funcionarios;
 mod planilha;
+mod sync;
 
 use std::sync::Mutex;
 
@@ -118,7 +119,11 @@ pub fn run() {
             commands::ferias::acao_notificacao,
             commands::ferias::obter_pendencia_notificacao,
             commands::ferias::notificacao_janela_pronta,
-            commands::ferias::fechar_janela_notificacao
+            commands::ferias::fechar_janela_notificacao,
+            commands::sync::estado_sync,
+            commands::sync::conectar_sync,
+            commands::sync::desconectar_sync,
+            commands::sync::sincronizar_agora
         ])
         .run(tauri::generate_context!())
         .expect("erro ao executar o aplicativo Tauri");

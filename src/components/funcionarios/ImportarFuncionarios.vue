@@ -15,7 +15,7 @@ import SelectBusca from "../ui/SelectBusca.vue";
 const { empresas } = useEmpresas();
 const { importarPlanilha, listar } = useFuncionarios();
 
-const empresaPadraoId = ref<number | null>(null);
+const empresaPadraoId = ref<string | null>(null);
 const importando = ref(false);
 const erro = ref<string | null>(null);
 const relatorio = ref<RelatorioImportacaoFuncionarios | null>(null);

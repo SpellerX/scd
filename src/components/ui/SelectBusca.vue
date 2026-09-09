@@ -7,14 +7,15 @@
  * Uso:
  *   <SelectBusca v-model="empresaId" :options="opcoes" placeholder="..." />
  *
- * Modelo: o id selecionado (number | null). Opções: { id, label }.
+ * Modelo: o id selecionado (`number | string | null` — empresas usam UUID
+ * string; usuários locais ainda usam número). Opções: { id, label }.
  * Genérico e reutilizável — mesmas regras de UX em qualquer tela.
  */
 import { computed, ref } from "vue";
 import { normalizarTexto } from "../../utils/texto";
 
 interface Opcao {
-  id: number;
+  id: number | string;
   label: string;
 }
 
@@ -27,7 +28,7 @@ const props = withDefaults(
   { placeholder: "Selecione...", inputId: undefined },
 );
 
-const valor = defineModel<number | null>({ default: null });
+const valor = defineModel<number | string | null>({ default: null });
 
 const aberto = ref(false);
 /** Texto digitado para filtrar (vazio = mostra todas). */

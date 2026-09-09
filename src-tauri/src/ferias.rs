@@ -15,8 +15,9 @@ use serde::Serialize;
 /// Período de férias vencido (ainda não regularizado).
 #[derive(Debug, Clone, Serialize)]
 pub struct FeriasVencida {
-    pub id: i64,
-    pub funcionario_id: i64,
+    /// Id UUID (TEXT) do período — chave única global.
+    pub id: String,
+    pub funcionario_id: String,
     pub funcionario_nome: String,
     pub empresa_nome: String,
     pub inicio: String,
@@ -28,8 +29,9 @@ pub struct FeriasVencida {
 /// Período de férias "a vencer" (dentro do prazo concessivo).
 #[derive(Debug, Clone, Serialize)]
 pub struct FeriasAVencer {
-    pub id: i64,
-    pub funcionario_id: i64,
+    /// Id UUID (TEXT) do período — chave única global.
+    pub id: String,
+    pub funcionario_id: String,
     pub funcionario_nome: String,
     pub empresa_nome: String,
     pub inicio: String,
@@ -70,7 +72,7 @@ const CHAVE_ALERTA_DIAS: &str = "ferias.alerta_dias";
 /// Chamado automaticamente pelo cadastro/importação de funcionários.
 pub fn gerar_periodos_do_funcionario(
     conn: &Connection,
-    employee_id: i64,
+    employee_id: &str,
     admissao_iso: &str,
 ) -> Result<(), String> {
     let hoje: String = conn
@@ -86,7 +88,8 @@ pub fn gerar_periodos_do_funcionario(
         let ja_existe: bool = conn
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM employee_leave_periods
-                                WHERE employee_id = ?1 AND inicio = ?2)",
+                                WHERE employee_id = ?1 AND inicio = ?2
+                                  AND deleted_at IS NULL)",
                 params![employee_id, inicio],
                 |linha| linha.get(0),
             )
@@ -94,10 +97,12 @@ pub fn gerar_periodos_do_funcionario(
 
         if !ja_existe {
             let vencimento = adicionar_meses(&inicio, 24);
+            // Id UUID gerado aqui (chave única global para a sincronização).
+            let id = uuid::Uuid::new_v4().to_string();
             conn.execute(
-                "INSERT INTO employee_leave_periods (employee_id, inicio, vencimento)
-                 VALUES (?1, ?2, ?3)",
-                params![employee_id, inicio, vencimento],
+                "INSERT INTO employee_leave_periods (id, employee_id, inicio, vencimento)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![id, employee_id, inicio, vencimento],
             )
             .map_err(|err| format!("Falha ao gerar o período de férias: {err}"))?;
         }
@@ -113,19 +118,22 @@ pub fn gerar_periodos_do_funcionario(
 /// deste módulo (idempotente — períodos existentes não são duplicados).
 pub fn gerar_periodos_existentes(conn: &Connection) -> Result<(), String> {
     let mut stmt = conn
-        .prepare("SELECT id, data_admissao FROM employees WHERE data_admissao IS NOT NULL")
+        .prepare(
+            "SELECT id, data_admissao FROM employees
+              WHERE data_admissao IS NOT NULL AND deleted_at IS NULL",
+        )
         .map_err(|err| format!("Falha ao preparar a geração de períodos: {err}"))?;
 
     let funcionarios = stmt
         .query_map([], |linha| {
-            Ok((linha.get::<_, i64>(0)?, linha.get::<_, String>(1)?))
+            Ok((linha.get::<_, String>(0)?, linha.get::<_, String>(1)?))
         })
         .map_err(|err| format!("Falha ao consultar funcionários: {err}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| format!("Falha ao ler funcionários: {err}"))?;
 
     for (id, admissao) in funcionarios {
-        gerar_periodos_do_funcionario(conn, id, &admissao)?;
+        gerar_periodos_do_funcionario(conn, &id, &admissao)?;
     }
 
     Ok(())
@@ -134,6 +142,7 @@ pub fn gerar_periodos_existentes(conn: &Connection) -> Result<(), String> {
 // ═══════════════════ Consultas das telas ════════════════════════════════════
 
 /// Férias VENCIDAS (prazo concessivo expirado e ainda não regularizadas).
+/// Só considera registros ativos (funcionário, empresa e período vivos).
 pub fn listar_vencidas(conn: &Connection) -> Result<Vec<FeriasVencida>, String> {
     let mut stmt = conn
         .prepare(
@@ -145,6 +154,9 @@ pub fn listar_vencidas(conn: &Connection) -> Result<Vec<FeriasVencida>, String> 
                JOIN companies c ON c.id = f.empresa_id
               WHERE p.regularizada = 0
                 AND p.vencimento <= date('now','localtime')
+                AND p.deleted_at IS NULL
+                AND f.deleted_at IS NULL
+                AND c.deleted_at IS NULL
               ORDER BY p.vencimento",
         )
         .map_err(|err| format!("Falha ao preparar a consulta de férias vencidas: {err}"))?;
@@ -182,6 +194,9 @@ pub fn listar_a_vencer(conn: &Connection, alerta_dias: i64) -> Result<Vec<Ferias
               WHERE p.regularizada = 0
                 AND p.vencimento > date('now','localtime')
                 AND date(p.vencimento, '-12 months') <= date('now','localtime')
+                AND p.deleted_at IS NULL
+                AND f.deleted_at IS NULL
+                AND c.deleted_at IS NULL
               ORDER BY p.vencimento",
         )
         .map_err(|err| format!("Falha ao preparar a consulta de férias a vencer: {err}"))?;
@@ -216,7 +231,7 @@ pub fn listar_a_vencer(conn: &Connection, alerta_dias: i64) -> Result<Vec<Ferias
 /// ("regularizar" um período vencido).
 pub fn regularizar(
     conn: &Connection,
-    periodo_id: i64,
+    periodo_id: &str,
     observacao: Option<String>,
 ) -> Result<(), String> {
     let alterados = conn
@@ -224,8 +239,9 @@ pub fn regularizar(
             "UPDATE employee_leave_periods
                 SET regularizada = 1,
                     regularizada_em = datetime('now','localtime'),
-                    observacao = ?1
-              WHERE id = ?2",
+                    observacao = ?1,
+                    updated_at = datetime('now')
+              WHERE id = ?2 AND deleted_at IS NULL",
             params![observacao, periodo_id],
         )
         .map_err(|err| format!("Falha ao regularizar as férias: {err}"))?;

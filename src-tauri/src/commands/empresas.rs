@@ -38,16 +38,19 @@ pub fn salvar_empresa(
 
     let db = state.db.lock().unwrap();
     if empresas::existe(&db, &dados.cnpj)? {
-        return Err(format!("A empresa com CNPJ {} já está cadastrada.", dados.cnpj));
+        return Err(format!(
+            "A empresa com CNPJ {} já está cadastrada.",
+            dados.cnpj
+        ));
     }
     empresas::inserir(&db, &dados)
 }
 
 /// Comando `remover_empresa` — exclui uma empresa cadastrada pelo id.
 #[tauri::command]
-pub fn remover_empresa(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+pub fn remover_empresa(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let db = state.db.lock().unwrap();
-    empresas::remover(&db, id)
+    empresas::remover(&db, &id)
 }
 
 /// Comando `remover_empresas` — exclui várias empresas de uma vez (em lote).
@@ -56,7 +59,7 @@ pub fn remover_empresa(state: State<'_, AppState>, id: i64) -> Result<(), String
 #[tauri::command]
 pub fn remover_empresas(
     state: State<'_, AppState>,
-    ids: Vec<i64>,
+    ids: Vec<String>,
 ) -> Result<empresas::ResultadoRemocao, String> {
     let mut db = state.db.lock().unwrap();
     empresas::remover_varias(&mut db, &ids)
