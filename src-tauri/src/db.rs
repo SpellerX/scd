@@ -12,10 +12,12 @@
 //!
 //! - `0` = banco antigo/sem versão (criado antes do versionamento);
 //! - `1` = CPF de funcionário passou a ser opcional;
-//! - `2` = formato atual: as tabelas sincronizáveis (`companies`,
-//!   `employees`, `employee_leave_periods`) ganharam **id UUID (TEXT)**, além
-//!   de `updated_at` e `deleted_at` (soft delete) — base para a futura
-//!   sincronização com a nuvem (Supabase).
+//! - `2` = as tabelas sincronizáveis (`companies`, `employees`,
+//!   `employee_leave_periods`) ganharam **id UUID (TEXT)**, além de
+//!   `updated_at` e `deleted_at` (soft delete) — base da sincronização com a
+//!   nuvem (Supabase);
+//! - `3` = `users` ganhou `updated_at` e `deleted_at` (soft delete) — usuários
+//!   e acessos passam a ser sincronizados pela nuvem (mantendo o login local).
 //!
 //! A cada inicialização o app confere a versão gravada e aplica, em ordem,
 //! apenas as migrações em falta. Isso substitui o antigo "adivinhar pelo
@@ -42,7 +44,7 @@ use uuid::Uuid;
 /// 2. atualizar esta constante;
 /// 3. manter `init_schema()` criando o esquema FINAL (bancos novos já
 ///    nascem na última versão, sem passar pelas migrações).
-pub const VERSAO_ATUAL: i64 = 2;
+pub const VERSAO_ATUAL: i64 = 3;
 
 /// Abre (ou cria) o banco no caminho informado e leva o esquema à versão atual.
 pub fn open(path: &Path) -> Result<Connection, String> {
@@ -94,7 +96,9 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             username      TEXT    NOT NULL UNIQUE,
             display_name  TEXT    NOT NULL,
             password_hash TEXT    NOT NULL,
-            created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+            created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+            updated_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+            deleted_at    TEXT
         );
 
         CREATE TABLE IF NOT EXISTS companies (
@@ -254,8 +258,25 @@ fn migracao_para(conn: &mut Connection, versao: i64) -> Result<(), String> {
         // reescritos com UUIDs determinísticos (mesmo registro = mesmo UUID
         // em qualquer máquina), preservando os vínculos entre tabelas.
         2 => migracao_v2(conn),
+        // v2 → v3: `users` ganha updated_at/deleted_at — usuários e acessos
+        // passam a ser sincronizados pela nuvem (soft delete preserva o login
+        // local/offline).
+        3 => migracao_v3(conn),
         _ => Err(format!("Migração para a versão {versao} não implementada.")),
     }
+}
+
+/// v2 → v3: adiciona as colunas de sincronização na tabela `users`.
+fn migracao_v3(conn: &mut Connection) -> Result<(), String> {
+    if tabela_tem_coluna(conn, "users", "deleted_at")? {
+        return Ok(()); // já no formato v3 (ex.: banco novo/normalizado)
+    }
+    conn.execute_batch(
+        "ALTER TABLE users ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime('now'));
+         ALTER TABLE users ADD COLUMN deleted_at TEXT;",
+    )
+    .map_err(|err| format!("Falha ao migrar a tabela users (v3): {err}"))?;
+    Ok(())
 }
 
 /// A coluna `employees.cpf` ainda é NOT NULL (formato antigo)?
@@ -649,6 +670,10 @@ mod testes {
         assert!(
             tabela_tem_coluna(&conn, "companies", "deleted_at").unwrap(),
             "empresas devem nascer com soft delete (v2)"
+        );
+        assert!(
+            tabela_tem_coluna(&conn, "users", "deleted_at").unwrap(),
+            "usuários devem nascer com soft delete (v3)"
         );
 
         // Empresa nasce com id UUID (TEXT) informado — como faz o domínio.

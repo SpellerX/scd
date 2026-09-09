@@ -37,8 +37,9 @@ const CHAVE_PULL_ATE: &str = "sync.pull_ate";
 /// Última sincronização bem-sucedida (exibida na tela).
 const CHAVE_ULTIMA_SYNC: &str = "sync.ultima_sync_em";
 
-/// Tabelas sincronizadas, na ordem de dependência (FK).
-const TABELAS: [&str; 3] = ["companies", "employees", "employee_leave_periods"];
+/// Tabelas sincronizadas, na ordem de dependência (FK). `users` não depende
+/// de nenhuma (os acessos por módulo viajam embutidos no próprio registro).
+const TABELAS: [&str; 4] = ["users", "companies", "employees", "employee_leave_periods"];
 
 // ═══════════════════ Estruturas expostas ao frontend ═════════════════════════
 
@@ -456,7 +457,7 @@ pub async fn sincronizar(
     }
     // Remoções na ordem filho → pai.
     let mut apagados_ordenados: Vec<(String, String)> = Vec::new();
-    for tabela in ["employee_leave_periods", "employees", "companies"] {
+    for tabela in ["users", "employee_leave_periods", "employees", "companies"] {
         apagados_ordenados.extend(
             apagados
                 .iter()
@@ -547,7 +548,7 @@ fn linhas_locais_alteradas(
     let conn = db.lock().unwrap();
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT id FROM {tabela} WHERE updated_at > ?1 ORDER BY updated_at"
+            "SELECT CAST(id AS TEXT) FROM {tabela} WHERE updated_at > ?1 ORDER BY updated_at"
         ))
         .map_err(|err| format!("Falha ao preparar o envio de {tabela}: {err}"))?;
 
@@ -640,6 +641,11 @@ fn payload_do_registro(
     tabela: &str,
     id: &str,
 ) -> Result<serde_json::Value, String> {
+    // Usuário tem payload próprio (acessos embutidos) — fora do fluxo comum.
+    if tabela == "users" {
+        return payload_do_usuario(conn, id);
+    }
+
     let valor = match tabela {
         "companies" => conn.query_row(
             "SELECT cnpj, razao_social, nome_fantasia, situacao, municipio, uf,
@@ -698,6 +704,46 @@ fn payload_do_registro(
     };
 
     valor.map_err(|err| format!("Falha ao ler o registro {tabela}/{id}: {err}"))
+}
+
+/// Payload de um usuário local: dados + acessos por módulo embutidos
+/// (`secoes`), já que a nuvem guarda os dois no mesmo registro.
+fn payload_do_usuario(conn: &Connection, id: &str) -> Result<serde_json::Value, String> {
+    let (username, display_name, password_hash, deleted_at) = conn
+        .query_row(
+            "SELECT username, display_name, password_hash, deleted_at
+               FROM users WHERE id = ?1",
+            [id],
+            |l| {
+                Ok((
+                    l.get::<_, String>(0)?,
+                    l.get::<_, String>(1)?,
+                    l.get::<_, String>(2)?,
+                    l.get::<_, Option<String>>(3)?,
+                ))
+            },
+        )
+        .map_err(|err| format!("Falha ao ler o usuário {id}: {err}"))?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT section_id FROM user_permissions
+              WHERE user_id = ?1 ORDER BY section_id",
+        )
+        .map_err(|err| format!("Falha ao ler os acessos do usuário: {err}"))?;
+    let secoes = stmt
+        .query_map([id], |l| l.get::<_, String>(0))
+        .map_err(|err| format!("Falha ao consultar os acessos: {err}"))?
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|err| format!("Falha ao ler os acessos: {err}"))?;
+
+    Ok(serde_json::json!({
+        "username": username,
+        "display_name": display_name,
+        "password_hash": password_hash,
+        "secoes": secoes,
+        "deleted_at": deleted_at,
+    }))
 }
 
 /// O registro local está apagado (soft delete)? Determina a fase do push.
@@ -820,6 +866,14 @@ fn aplicar_registro_remoto(
         Some(registro) => registro,
         None => return Ok(false),
     };
+
+    // Usuários: identidade é o `username` (não há `id` no payload) e a
+    // aplicação é própria (reativa/atualiza pelo nome + reescreve acessos).
+    if tabela == "users" {
+        let conn = db.lock().unwrap();
+        return aplicar_usuario_remoto(&conn, registro, avisos);
+    }
+
     let Some(id) = id_do_registro(registro) else {
         return Ok(false);
     };
@@ -1037,6 +1091,122 @@ fn aplicar_registro_remoto(
     }
 }
 
+/// Aplica um usuário vindo da nuvem (identidade = `username`).
+/// - Cria localmente se não existir (ou reativa um apagado, atualizando hash);
+/// - Se a nuvem for mais nova, atualiza nome/hash/remoção e **reescreve os
+///   acessos** (`user_permissions`) com a lista `secoes` recebida;
+/// - Usuário removido ⇒ soft-delete local + encerra as sessões dele.
+fn aplicar_usuario_remoto(
+    conn: &Connection,
+    registro: &serde_json::Map<String, serde_json::Value>,
+    _avisos: &mut Vec<String>,
+) -> Result<bool, String> {
+    let Some(username) = campo_str(registro, "username") else {
+        return Ok(false);
+    };
+    let Some(remoto_ts) = registro
+        .get("updated_at")
+        .and_then(|v| v.as_str())
+        .and_then(normalizar_ts_servidor)
+    else {
+        return Ok(false);
+    };
+
+    // Superusuário nunca é removido pela nuvem.
+    let removido = registro
+        .get("deleted_at")
+        .and_then(|v| v.as_str())
+        .and_then(normalizar_ts_servidor);
+    if username == crate::auth::SUPER_USUARIO && removido.is_some() {
+        return Ok(false);
+    }
+
+    let local: Option<(i64, Option<String>)> = conn
+        .query_row(
+            "SELECT id, updated_at FROM users WHERE username = ?1",
+            [&username],
+            |l| Ok((l.get(0)?, l.get(1)?)),
+        )
+        .optional()
+        .map_err(|err| format!("Falha ao consultar o usuário {username}: {err}"))?;
+
+    let secoes_remotas: Vec<String> = registro
+        .get("secoes")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    match local {
+        None => {
+            // Cria o usuário localmente (o id local é gerado pelo banco).
+            if removido.is_some() {
+                return Ok(false); // nunca existiu localmente — nada a criar
+            }
+            conn.execute(
+                "INSERT INTO users (username, display_name, password_hash)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![
+                    username,
+                    campo_str(registro, "display_name").unwrap_or_default(),
+                    campo_str(registro, "password_hash").unwrap_or_default(),
+                ],
+            )
+            .map_err(|err| format!("Falha ao receber o usuário {username}: {err}"))?;
+            let user_id = conn.last_insert_rowid();
+            reescrever_acessos(conn, user_id, &secoes_remotas)?;
+            Ok(true)
+        }
+        Some((user_id, local_ts)) => {
+            let local_ts = local_ts.unwrap_or_default();
+            if local_ts > remoto_ts {
+                return Ok(false); // local mais novo — mantém
+            }
+            conn.execute(
+                "UPDATE users
+                    SET display_name = ?1, password_hash = ?2,
+                        deleted_at = ?3, updated_at = ?4
+                  WHERE id = ?5",
+                rusqlite::params![
+                    campo_str(registro, "display_name").unwrap_or_default(),
+                    campo_str(registro, "password_hash").unwrap_or_default(),
+                    removido,
+                    remoto_ts,
+                    user_id,
+                ],
+            )
+            .map_err(|err| format!("Falha ao atualizar o usuário {username}: {err}"))?;
+
+            if let Some(removido) = removido {
+                // Usuário removido na nuvem: encerra as sessões locais dele.
+                conn.execute("DELETE FROM sessions WHERE user_id = ?1", [user_id])
+                    .map_err(|err| format!("Falha ao encerrar sessões de {username}: {err}"))?;
+                let _ = removido;
+            } else {
+                reescrever_acessos(conn, user_id, &secoes_remotas)?;
+            }
+            Ok(true)
+        }
+    }
+}
+
+/// Substitui os acessos locais de um usuário pela lista remota.
+fn reescrever_acessos(conn: &Connection, user_id: i64, secoes: &[String]) -> Result<(), String> {
+    conn.execute("DELETE FROM user_permissions WHERE user_id = ?1", [user_id])
+        .map_err(|err| format!("Falha ao limpar acessos locais: {err}"))?;
+    for secao in secoes {
+        conn.execute(
+            "INSERT INTO user_permissions (user_id, section_id) VALUES (?1, ?2)",
+            rusqlite::params![user_id, secao],
+        )
+        .map_err(|err| format!("Falha ao salvar o acesso \"{secao}\": {err}"))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod testes {
     //! Testes das partes que não dependem de rede (timestamps e helpers).
@@ -1166,7 +1336,8 @@ mod testes {
             estado.email, resumo.enviados, resumo.recebidos, resumo.avisos
         );
 
-        // 2) Cria uma empresa local e sincroniza: ela precisa ir para a nuvem.
+        // 2) Cria uma empresa E um usuário local (com acessos) e sincroniza:
+        //    ambos precisam ir para a nuvem (usuário com `secoes` embutidas).
         let id_empresa = uuid::Uuid::new_v4().to_string();
         let cnpj = "33333333000199";
         {
@@ -1176,15 +1347,27 @@ mod testes {
                 rusqlite::params![id_empresa, cnpj],
             )
             .expect("inserir empresa local falhou");
+            conn.execute(
+                "INSERT INTO users (username, display_name, password_hash)
+                 VALUES ('usuaria-e2e', 'Usuária E2E', 'hash-e2e')",
+                [],
+            )
+            .expect("inserir usuária local falhou");
+            let user_id = conn.last_insert_rowid();
+            conn.execute(
+                "INSERT INTO user_permissions (user_id, section_id) VALUES (?1, 'cadastro-empresa')",
+                [user_id],
+            )
+            .expect("inserir acesso da usuária falhou");
         }
         let resumo2 = sincronizar(&db, &http).await.expect("segundo ciclo falhou");
         println!(
-            "[e2e] push da empresa -> enviados={} recebidos={} avisos={:?}",
+            "[e2e] push empresa+usuário -> enviados={} recebidos={} avisos={:?}",
             resumo2.enviados, resumo2.recebidos, resumo2.avisos
         );
         assert!(
-            resumo2.enviados >= 1,
-            "a empresa local deveria ter sido enviada"
+            resumo2.enviados >= 2,
+            "empresa e usuário deveriam ter sido enviados"
         );
         assert!(
             resumo2.avisos.is_empty(),
@@ -1192,7 +1375,8 @@ mod testes {
             resumo2.avisos
         );
 
-        // 3) Soft-delete local: a remoção precisa chegar à nuvem no próximo ciclo.
+        // 3) Soft-delete local (empresa + usuário): a remoção precisa chegar à
+        //    nuvem no próximo ciclo.
         {
             let conn = db.lock().unwrap();
             conn.execute(
@@ -1200,6 +1384,12 @@ mod testes {
                 [&id_empresa],
             )
             .expect("soft delete local falhou");
+            conn.execute(
+                "UPDATE users SET deleted_at = datetime('now'), updated_at = datetime('now')
+                  WHERE username = 'usuaria-e2e'",
+                [],
+            )
+            .expect("soft delete da usuária falhou");
         }
         let resumo3 = sincronizar(&db, &http)
             .await
@@ -1208,9 +1398,84 @@ mod testes {
             "[e2e] soft-delete -> enviados={} avisos={:?}",
             resumo3.enviados, resumo3.avisos
         );
-        assert!(resumo3.enviados >= 1, "a remoção deveria ter sido enviada");
+        assert!(
+            resumo3.enviados >= 2,
+            "as remoções deveriam ter sido enviadas"
+        );
 
         let _ = std::fs::remove_file(&caminho);
         println!("[e2e] OK — motor sincronizou com a nuvem real");
+    }
+
+    #[test]
+    fn usuarios_payload_e_aplicacao_redonda() {
+        // Origem: usuário local com acessos → payload com `secoes`.
+        let caminho_origem = caminho_temporario();
+        let conn_origem = crate::db::open(&caminho_origem).expect("abrir banco origem falhou");
+        {
+            conn_origem
+                .execute(
+                    "INSERT INTO users (username, display_name, password_hash)
+                     VALUES ('maria', 'Maria Silva', 'hash-de-teste')",
+                    [],
+                )
+                .expect("inserir usuária falhou");
+            let id = conn_origem.last_insert_rowid();
+            conn_origem
+                .execute(
+                    "INSERT INTO user_permissions (user_id, section_id) VALUES (?1, 'cadastro-empresa'), (?1, 'ferias-a-vencer')",
+                    [id],
+                )
+                .expect("inserir acessos falhou");
+        }
+        let mut payload = payload_do_usuario(
+            &conn_origem,
+            &conn_origem
+                .query_row("SELECT id FROM users WHERE username='maria'", [], |l| {
+                    l.get::<_, i64>(0)
+                })
+                .expect("id da usuária")
+                .to_string(),
+        )
+        .expect("payload da usuária falhou");
+        assert_eq!(payload["username"], "maria");
+        assert_eq!(payload["secoes"].as_array().map(Vec::len), Some(2));
+
+        // O servidor acrescenta o updated_at (ausente no payload local).
+        payload["updated_at"] = serde_json::Value::String("2026-01-01 10:00:00".to_string());
+
+        // Destino: aplica o registro remoto num banco vazio.
+        let caminho_destino = caminho_temporario();
+        let conn_destino = crate::db::open(&caminho_destino).expect("abrir banco destino falhou");
+        let mut avisos = Vec::new();
+        let aplicado = aplicar_usuario_remoto(
+            &conn_destino,
+            payload.as_object().expect("objeto"),
+            &mut avisos,
+        )
+        .expect("aplicar usuária falhou");
+        assert!(aplicado);
+
+        let (nome, hash): (String, String) = conn_destino
+            .query_row(
+                "SELECT display_name, password_hash FROM users WHERE username = 'maria'",
+                [],
+                |l| Ok((l.get(0)?, l.get(1)?)),
+            )
+            .expect("usuária não chegou");
+        assert_eq!(nome, "Maria Silva");
+        assert_eq!(hash, "hash-de-teste");
+        let total_acessos: i64 = conn_destino
+            .query_row(
+                "SELECT COUNT(*) FROM user_permissions p JOIN users u ON u.id = p.user_id
+                  WHERE u.username = 'maria'",
+                [],
+                |l| l.get(0),
+            )
+            .expect("contar acessos");
+        assert_eq!(total_acessos, 2, "acessos devem ter sido reescritos");
+
+        let _ = std::fs::remove_file(&caminho_origem);
+        let _ = std::fs::remove_file(&caminho_destino);
     }
 }

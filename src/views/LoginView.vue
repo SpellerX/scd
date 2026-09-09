@@ -24,15 +24,6 @@ import LoginForm from "../components/LoginForm.vue";
       <div class="mt-6">
         <LoginForm />
       </div>
-
-      <!--
-        Ajuda de desenvolvimento: mostra a credencial criada automaticamente
-        pelo backend (auth::ensure_demo_user). Remova quando houver cadastro real.
-      -->
-      <p class="mt-6 text-xs text-neutral-400 dark:text-neutral-500">
-        Demo: usuário <code class="font-semibold">admin</code> · senha
-        <code class="font-semibold">admin</code>
-      </p>
     </div>
   </main>
 </template>

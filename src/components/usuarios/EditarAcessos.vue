@@ -90,7 +90,8 @@ async function salvar() {
     </h2>
     <p class="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
       Escolha o usuário e marque os módulos que ele pode ver. O
-      <code class="font-semibold">admin</code> sempre tem acesso total.
+      <code class="font-semibold">fernando</code> (superusuário) sempre tem
+      acesso total.
     </p>
 
     <div class="mt-4 flex flex-col gap-1.5">
@@ -103,12 +104,12 @@ async function salvar() {
       />
     </div>
 
-    <!-- Aviso quando seleciona o admin -->
+    <!-- Aviso quando seleciona o superusuário -->
     <p
-      v-if="rotuloSelecionado && rotuloSelecionado.username === 'admin'"
+      v-if="rotuloSelecionado && rotuloSelecionado.username === 'fernando'"
       class="mt-4 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-700 dark:border-indigo-900 dark:bg-indigo-950 dark:text-indigo-300"
     >
-      O usuário <strong>admin</strong> é o administrador: tem acesso a todos
+      O usuário <strong>fernando</strong> é o superusuário: tem acesso a todos
       os módulos e não precisa de permissões.
     </p>
 

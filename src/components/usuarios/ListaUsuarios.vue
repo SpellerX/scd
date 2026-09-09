@@ -106,10 +106,10 @@ async function excluir(usuario: Usuario) {
             <td class="py-2.5 pr-4 font-mono text-xs font-medium">
               {{ usuario.username }}
               <span
-                v-if="usuario.username === 'admin'"
+                v-if="usuario.username === 'fernando'"
                 class="ml-2 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
               >
-                Administrador
+                Superusuário
               </span>
             </td>
             <td class="py-2.5 pr-4">{{ usuario.display_name }}</td>
@@ -119,12 +119,12 @@ async function excluir(usuario: Usuario) {
             <td class="py-2.5 text-right">
               <button
                 type="button"
-                :disabled="usuario.username === 'admin' || removendoId === usuario.id"
+                :disabled="usuario.username === 'fernando' || removendoId === usuario.id"
                 @click="excluir(usuario)"
                 class="rounded-lg px-2.5 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40 dark:text-red-400 dark:hover:bg-red-950"
                 :title="
-                  usuario.username === 'admin'
-                    ? 'O usuário administrador padrão não pode ser excluído'
+                  usuario.username === 'fernando'
+                    ? 'O superusuário (fernando) não pode ser excluído'
                     : `Excluir ${usuario.username}`
                 "
               >

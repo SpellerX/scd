@@ -65,8 +65,9 @@ pub fn run() {
                 }
             };
 
-            // 2) Garante o usuário de demonstração (apenas desenvolvimento).
-            auth::ensure_demo_user(&conn).expect("não foi possível criar o usuário demo");
+            // 2) Garante o superusuário do sistema (fernando) e remove o demo antigo.
+            auth::ensure_usuario_inicial(&conn)
+                .expect("não foi possível garantir o superusuário do sistema");
 
             // 3) Gera períodos de férias em falta dos funcionários já existentes.
             ferias::gerar_periodos_existentes(&conn)

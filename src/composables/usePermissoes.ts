@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 /**
  * Permissões do usuário logado: quais seções (itens de menu) ele pode ver.
  *
- * - `admin` (username "admin") tem acesso a TUDO — ignora a tabela de permissões;
+ * - `fernando` (superusuário) tem acesso a TUDO — ignora a tabela de permissões;
  * - demais usuários: a lista de seções vem do backend (Sistema → Usuários);
  * - o menu superior é filtrado por `pode(id)`.
  */
@@ -24,7 +24,7 @@ export function usePermissoes() {
       return;
     }
 
-    usuarioAdmin.value = usuario.username === "admin";
+    usuarioAdmin.value = usuario.username === "fernando";
     if (usuarioAdmin.value) {
       secoesPermitidas.value = [];
       pronto.value = true;

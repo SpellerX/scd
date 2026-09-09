@@ -20,8 +20,8 @@ onMounted(() => {
       <h1 class="text-2xl font-bold">Usuários do SCD</h1>
       <p class="mt-1 text-neutral-500 dark:text-neutral-400">
         Cadastre quem pode acessar o sistema e escolha os módulos de cada um.
-        O usuário <code class="font-semibold">admin</code> é o administrador
-        padrão (acesso total) e não pode ser excluído.
+        O usuário <code class="font-semibold">fernando</code> é o superusuário
+        (acesso total) e não pode ser excluído.
       </p>
     </div>
 

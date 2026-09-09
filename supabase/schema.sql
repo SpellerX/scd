@@ -172,3 +172,40 @@ create policy periods_update on public.employee_leave_periods
 drop policy if exists periods_delete on public.employee_leave_periods;
 create policy periods_delete on public.employee_leave_periods
     for delete using (owner_id = auth.uid());
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- USUÁRIOS DO SCD (login local espelhado na nuvem para controle central).
+-- Chave = `username` (único por dono entre ativos). Os acessos por módulo
+-- viajam embutidos na coluna `secoes` (lista de ids de seção/menu).
+-- ⚠️ Não confundir com `auth.users` (contas de autenticação do Supabase).
+-- ═══════════════════════════════════════════════════════════════════════════
+create table if not exists public.users (
+    username      text        primary key,
+    display_name  text        not null,
+    password_hash text        not null,
+    secoes        text[]      not null default '{}',
+    created_at    timestamptz not null default now(),
+    updated_at    timestamptz not null default now(),
+    deleted_at    timestamptz,
+    owner_id      uuid        not null default auth.uid()
+);
+
+drop trigger if exists users_updated_at on public.users;
+create trigger users_updated_at
+    before update on public.users
+    for each row execute function public.scd_set_updated_at();
+
+alter table public.users enable row level security;
+
+drop policy if exists users_select on public.users;
+create policy users_select on public.users
+    for select using (owner_id = auth.uid());
+drop policy if exists users_insert on public.users;
+create policy users_insert on public.users
+    for insert with check (owner_id = auth.uid());
+drop policy if exists users_update on public.users;
+create policy users_update on public.users
+    for update using (owner_id = auth.uid()) with check (owner_id = auth.uid());
+drop policy if exists users_delete on public.users;
+create policy users_delete on public.users
+    for delete using (owner_id = auth.uid());

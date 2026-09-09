@@ -3,12 +3,13 @@
 // (TopMenu) + área de conteúdo que troca conforme a seção ativa.
 //
 // O menu é filtrado pelas PERMISSÕES do usuário logado (usePermissoes):
-// - admin vê tudo; os demais veem apenas as seções liberadas em
-//   Sistema → Usuários → Acessos.
+// - o superusuário (fernando) vê tudo; os demais veem apenas as seções
+//   liberadas em Sistema → Usuários → Acessos.
 // As seções com tela própria ficam registradas em `telasDasSecoes`;
 // as demais mostram o placeholder "em construção".
 import { computed, onMounted, onUnmounted, type Component } from "vue";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { topMenu } from "../config/menu";
 import { useAuth } from "../composables/useAuth";
 import { useNavigation } from "../composables/useNavigation";
@@ -86,6 +87,18 @@ let timerSincronizacao: number | undefined;
 const INTERVALO_SINCRONIZACAO_MS = 60_000;
 
 onMounted(() => {
+  // Ao entrar autenticado, abre a janela maximizada (experiência de trabalho).
+  // Requer a permissão "core:window:allow-maximize" (capabilities/default.json).
+  const maximizar = () =>
+    void getCurrentWindow()
+      .maximize()
+      .catch(() => {
+        /* sem janela nativa (navegador) ou permissão — nada a fazer */
+      });
+  maximizar();
+  // Segunda tentativa caso a janela ainda esteja estabilizando no 1º mount.
+  window.setTimeout(maximizar, 300);
+
   void listen<{ secao: string }>("ir-para-secao", (evento) => {
     const item = topMenu.flatMap((grupo) => grupo.items).find((i) => i.id === evento.payload.secao);
     if (item) openSection(item);

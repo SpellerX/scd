@@ -32,10 +32,11 @@ Aplicativo desktop com **Tauri v2** (Rust) + **Vue 3** (TypeScript/Vite) + **Tai
   funcionários vinculados **não podem ser excluídas**
 - **Administração de usuários** (**Sistema → Usuários**): cadastrar/excluir
   logins (nome de exibição, usuário em minúsculas e senha com mínimo de 4
-  caracteres); o usuário `admin` é protegido contra exclusão
+  caracteres); o superusuário criado no primeiro acesso é protegido contra
+  exclusão
 - **Acessos por usuário**: o administrador escolhe **quais módulos cada
-  usuário pode ver** (menu é filtrado automaticamente no login); `admin`
-  sempre tem acesso total
+  usuário pode ver** (menu é filtrado automaticamente no login); o
+  superusuário sempre tem acesso total
 - **Controle de férias automático**: ao cadastrar/importar funcionário com
   data de admissão, o sistema gera os períodos (12 meses aquisitivos + 12
   para gozar). **Férias vencidas** (prazo expirado) têm botão
@@ -155,8 +156,10 @@ scd/
   (Windows: `%APPDATA%\com.scd.app\`).
 - **Resetar em desenvolvimento**: feche o app e apague o arquivo — o esquema
   e o usuário demo são recriados no próximo início.
-- Credencial demo: usuário `admin`, senha `admin`
-  (ver `auth::ensure_demo_user` — remover quando houver cadastro real).
+- Primeiro acesso: o app cria o superusuário `fernando` (senha definida em
+  `auth::ensure_usuario_inicial` — não exibida em nenhuma tela). Troque essa
+  senha antes de distribuir (não há tela de troca ainda; altere o valor em
+  `auth.rs` + apague o banco local, ou implemente a troca de senha).
 - Desde o esquema v2, as tabelas sincronizáveis (`companies`, `employees`,
   `employee_leave_periods`) usam **id UUID**, `updated_at` e `deleted_at`
   (soft delete) — a migração acontece automaticamente ao abrir o app.

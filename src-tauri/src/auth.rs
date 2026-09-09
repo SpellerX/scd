@@ -78,7 +78,11 @@ fn verify_password(password: &str, password_hash: &str) -> bool {
 /// É a ÚNICA regra de normalização de usuários — todo dado que entra no
 /// banco (ou é comparado com ele) passa por aqui.
 fn normalize_username(username: &str) -> String {
-    username.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    username
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// Cria um usuário com a senha já hasheada.
@@ -108,16 +112,44 @@ pub fn create_user(
     Ok(())
 }
 
-/// Cria o usuário de demonstração quando o banco está vazio.
-/// ⚠️ Apenas para desenvolvimento — remova quando houver cadastro real.
-pub fn ensure_demo_user(conn: &Connection) -> Result<(), String> {
-    let total: i64 = conn
-        .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
-        .map_err(|err| format!("Falha ao contar usuários: {err}"))?;
+/// Nome do superusuário do sistema: acesso TOTAL (ignora permissões por
+/// módulo) e protegido contra exclusão. Configurado na primeira execução.
+pub const SUPER_USUARIO: &str = "fernando";
 
-    if total == 0 {
-        // Demo: admin / admin
-        create_user(conn, "admin", "Administrador", "admin")?;
+/// Garante o superusuário do sistema e remove a conta demo antiga ("admin").
+///
+/// Na primeira execução (banco vazio) cria `fernando / admin150202`. Também
+/// roda em bancos antigos: cria o superusuário se ainda não existir e apaga o
+/// usuário demo "admin" (que deixou de ser o superusuário), junto com as
+/// sessões dele.
+pub fn ensure_usuario_inicial(conn: &Connection) -> Result<(), String> {
+    // 1) Superusuário sempre presente (ativo).
+    let existe: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM users WHERE username = ?1 AND deleted_at IS NULL)",
+            [SUPER_USUARIO],
+            |linha| linha.get(0),
+        )
+        .map_err(|err| format!("Falha ao conferir o superusuário: {err}"))?;
+    if !existe {
+        create_user(conn, SUPER_USUARIO, "Fernando", "admin150202")?;
+    }
+
+    // 2) Remove o demo antigo "admin" (ele não é mais o superusuário).
+    let admin_id: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM users WHERE username = 'admin' AND deleted_at IS NULL",
+            [],
+            |linha| linha.get(0),
+        )
+        .optional()
+        .map_err(|err| format!("Falha ao consultar o usuário demo: {err}"))?;
+
+    if let Some(id) = admin_id {
+        conn.execute("DELETE FROM sessions WHERE user_id = ?1", [id])
+            .map_err(|err| format!("Falha ao encerrar as sessões do demo: {err}"))?;
+        conn.execute("DELETE FROM users WHERE id = ?1", [id])
+            .map_err(|err| format!("Falha ao remover o usuário demo: {err}"))?;
     }
     Ok(())
 }
@@ -127,7 +159,8 @@ fn find_by_username(conn: &Connection, username: &str) -> rusqlite::Result<Optio
     conn.query_row(
         "SELECT id, username, display_name, password_hash
            FROM users
-          WHERE username = ?1",
+          WHERE username = ?1
+            AND deleted_at IS NULL",
         [username],
         |row| {
             Ok(UserRecord {
@@ -165,7 +198,8 @@ pub fn usuario_por_token(conn: &Connection, token: &str) -> Result<Option<User>,
         "SELECT u.id, u.username, u.display_name
            FROM sessions s
            JOIN users u ON u.id = s.user_id
-          WHERE s.token = ?1",
+          WHERE s.token = ?1
+            AND u.deleted_at IS NULL",
         [token],
         |row| {
             Ok(User {
@@ -211,6 +245,7 @@ pub fn listar_usuarios(conn: &Connection) -> Result<Vec<Usuario>, String> {
         .prepare(
             "SELECT id, username, display_name, created_at
                FROM users
+              WHERE deleted_at IS NULL
               ORDER BY username COLLATE NOCASE",
         )
         .map_err(|err| format!("Falha ao preparar a consulta de usuários: {err}"))?;
@@ -231,12 +266,13 @@ pub fn listar_usuarios(conn: &Connection) -> Result<Vec<Usuario>, String> {
     Ok(usuarios)
 }
 
-/// Remove um usuário pelo id.
-/// O usuário padrão `admin` não pode ser excluído (protege o acesso ao app).
+/// Remove um usuário pelo id (soft delete — a remoção também é sincronizada
+/// pela nuvem; o login local/offline dos demais continua funcionando).
+/// O superusuário (`fernando`) não pode ser excluído (protege o acesso ao app).
 pub fn remover_usuario(conn: &Connection, id: i64) -> Result<(), String> {
     let username: Option<String> = conn
         .query_row(
-            "SELECT username FROM users WHERE id = ?1",
+            "SELECT username FROM users WHERE id = ?1 AND deleted_at IS NULL",
             [id],
             |linha| linha.get(0),
         )
@@ -247,26 +283,32 @@ pub fn remover_usuario(conn: &Connection, id: i64) -> Result<(), String> {
         return Err("Usuário não encontrado ou já removido.".to_string());
     };
 
-    if username == "admin" {
-        return Err("O usuário administrador padrão (admin) não pode ser excluído.".to_string());
+    if username == SUPER_USUARIO {
+        return Err(format!(
+            "O usuário superadministrador ({SUPER_USUARIO}) não pode ser excluído."
+        ));
     }
 
-    // Encerra as sessões persistentes do usuário antes de removê-lo.
+    // Encerra as sessões persistentes do usuário e marca o soft delete.
+    conn.execute("DELETE FROM sessions WHERE user_id = ?1", [id])
+        .map_err(|err| format!("Falha ao encerrar as sessões do usuário: {err}"))?;
+
     conn.execute(
-        "DELETE FROM sessions WHERE user_id = ?1",
+        "UPDATE users
+            SET deleted_at = datetime('now'),
+                updated_at = datetime('now')
+          WHERE id = ?1",
         [id],
     )
-    .map_err(|err| format!("Falha ao encerrar as sessões do usuário: {err}"))?;
-
-    conn.execute("DELETE FROM users WHERE id = ?1", [id])
-        .map_err(|err| format!("Falha ao excluir o usuário: {err}"))?;
+    .map_err(|err| format!("Falha ao excluir o usuário: {err}"))?;
 
     Ok(())
 }
 
 // ═══════════════════ Acessos por usuário ═══════════════════════════════════
 
-/// Usuário `admin` é o administrador: tem acesso a TUDO (ignora permissões).
+/// O superusuário (`fernando`) é o administrador: tem acesso a TUDO (ignora
+/// permissões por módulo).
 pub fn e_administrador(conn: &Connection, user_id: i64) -> Result<bool, String> {
     let username: Option<String> = conn
         .query_row(
@@ -277,7 +319,7 @@ pub fn e_administrador(conn: &Connection, user_id: i64) -> Result<bool, String> 
         .optional()
         .map_err(|err| format!("Falha ao consultar o usuário: {err}"))?;
 
-    Ok(username.as_deref() == Some("admin"))
+    Ok(username.as_deref() == Some(SUPER_USUARIO))
 }
 
 /// Seções (itens de menu) liberadas para o usuário.
@@ -296,7 +338,7 @@ pub fn listar_secoes_do_usuario(conn: &Connection, user_id: i64) -> Result<Vec<S
 }
 
 /// Substitui os acessos de um usuário pela lista informada.
-/// O usuário `admin` tem acesso total e não pode ser editado por aqui.
+/// O superusuário tem acesso total e não pode ser editado por aqui.
 pub fn salvar_secoes_do_usuario(
     conn: &mut Connection,
     user_id: i64,
@@ -304,8 +346,7 @@ pub fn salvar_secoes_do_usuario(
 ) -> Result<(), String> {
     if e_administrador(conn, user_id)? {
         return Err(
-            "O usuário admin tem acesso total ao sistema e não precisa de permissões."
-                .to_string(),
+            "O superusuário tem acesso total ao sistema e não precisa de permissões.".to_string(),
         );
     }
 
@@ -325,6 +366,15 @@ pub fn salvar_secoes_do_usuario(
             )
             .map_err(|err| format!("Falha ao salvar o acesso \"{secao}\": {err}"))?;
     }
+
+    // Marca o usuário como alterado — o push da sincronização usa isso para
+    // enviar a nova lista de acessos para a nuvem.
+    transacao
+        .execute(
+            "UPDATE users SET updated_at = datetime('now') WHERE id = ?1",
+            [user_id],
+        )
+        .map_err(|err| format!("Falha ao registrar a alteração de acessos: {err}"))?;
 
     transacao
         .commit()
