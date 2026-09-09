@@ -1,0 +1,36 @@
+/* Entrada do Tailwind CSS v4 (preflight + utilitários).
+   Para temas personalizados, adicione @theme aqui: https://tailwindcss.com/docs/theme */
+@import "tailwindcss";
+
+/* ── Experiência do usuário: cursor indica o que é clicável ──────────────
+   O preflight do Tailwind deixa o cursor padrão (seta) até em botões.
+   Estas regras restauram a afordância esperada em toda a aplicação:
+   ponteiro = clicável; "not-allowed" = desabilitado. */
+@layer base {
+  /* Elementos clicáveis (habilitados) mostram a "mãozinha" */
+  button:not(:disabled),
+  [role="button"]:not(:disabled),
+  [role="menuitem"]:not(:disabled),
+  summary,
+  select:not(:disabled),
+  a,
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled),
+  input[type="file"]:not(:disabled),
+  label[for] {
+    cursor: pointer;
+  }
+
+  /* Texto e campos digitáveis continuam com cursor de texto */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not(:disabled),
+  textarea:not(:disabled) {
+    cursor: text;
+  }
+
+  /* Tudo que estiver desabilitado indica que não pode ser clicado.
+     `!important` garante que vence as regras específicas acima. */
+  :disabled,
+  [disabled] {
+    cursor: not-allowed !important;
+  }
+}

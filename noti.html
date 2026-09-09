@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <title>SCD — Notificação</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body { background: transparent; overflow: hidden; }
+      body { font-family: "Segoe UI", system-ui, Arial, sans-serif; user-select: none; }
+
+      /* ── Cartão principal ─────────────────────────────────────────── */
+      .janela {
+        position: relative;
+        margin: 8px;
+        height: calc(100% - 16px);
+        display: flex; flex-direction: column;
+        border-radius: 18px;
+        background: #ffffff;
+        border: 1px solid rgba(15, 23, 42, .08);
+        box-shadow:
+          0 18px 50px rgba(2, 6, 23, .30),
+          0 2px 8px rgba(2, 6, 23, .12);
+        overflow: hidden;
+        /* Entrada: desliza da direita (a janela abre no canto superior
+           direito) com uma leve "esticada" final. */
+        animation: entrar .5s cubic-bezier(.21, 1.02, .45, 1.18) both;
+      }
+
+      @keyframes entrar {
+        0%   { opacity: 0; transform: translateX(120px) scale(.9); }
+        60%  { opacity: 1; transform: translateX(-8px) scale(1.015); }
+        100% { opacity: 1; transform: translateX(0) scale(1); }
+      }
+
+      /* ── Cabeçalho (cor muda conforme o tipo) ─────────────────────── */
+      .topo {
+        position: relative;
+        display: flex; align-items: center; gap: 12px;
+        padding: 14px 46px 14px 16px;
+        color: #fff;
+        overflow: hidden;
+      }
+      .topo.vencida { background: linear-gradient(135deg, #f43f5e, #be123c); }
+      .topo.alerta  { background: linear-gradient(135deg, #f59e0b, #b45309); }
+
+      /* Brilho que atravessa o topo de leve, de vez em quando */
+      .topo::after {
+        content: "";
+        position: absolute; inset: 0;
+        background: linear-gradient(105deg, transparent 30%, rgba(255,255,255,.25) 50%, transparent 70%);
+        transform: translateX(-100%);
+        animation: brilho 2.8s ease-in-out .8s infinite;
+        pointer-events: none;
+      }
+      @keyframes brilho {
+        55%, 100% { transform: translateX(100%); }
+      }
+
+      .icone {
+        flex: none;
+        width: 34px; height: 34px; border-radius: 11px;
+        background: rgba(255,255,255,.22);
+        display: flex; align-items: center; justify-content: center;
+        animation: icone .45s cubic-bezier(.34, 1.56, .64, 1) .18s both;
+      }
+      @keyframes icone {
+        from { opacity: 0; transform: scale(.3) rotate(-14deg); }
+        to   { opacity: 1; transform: scale(1) rotate(0deg); }
+      }
+      .icone svg { width: 20px; height: 20px; }
+      /* Mostra o ícone certo conforme o tipo do topo */
+      .icone svg.sino  { display: none; }
+      .topo.alerta  .icone svg.sino   { display: block; }
+      .topo.alerta  .icone svg.alerta { display: none; }
+
+      .titulo-linha { min-width: 0; }
+      .titulo { font-size: 14.5px; font-weight: 700; line-height: 1.2; letter-spacing: .1px; }
+      .subtitulo { font-size: 11px; font-weight: 500; opacity: .85; margin-top: 2px; }
+
+      .fechar {
+        position: absolute; top: 8px; right: 8px; z-index: 3;
+        width: 26px; height: 26px; border: 0; border-radius: 8px;
+        background: rgba(255,255,255,.18); color: #fff;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 12px; line-height: 1; cursor: pointer;
+        transition: background .15s ease, transform .25s ease;
+      }
+      .fechar:hover { background: rgba(0,0,0,.22); transform: rotate(90deg); }
+
+      /* ── Corpo com a mensagem ─────────────────────────────────────── */
+      .corpo {
+        flex: 1;
+        padding: 14px 18px 6px;
+        font-size: 13px; color: #334155; line-height: 1.5;
+        overflow: hidden;
+      }
+      .corpo .carregando { color: #94a3b8; }
+      .corpo .mensagem { display: block; }
+      .marcador {
+        align-self: flex-start;
+        font-size: 10px; font-weight: 700; letter-spacing: .6px;
+        text-transform: uppercase;
+        padding: 3px 9px; border-radius: 999px; margin-bottom: 8px;
+        animation: marcador .4s ease .32s both;
+      }
+      .marcador.vencida { background: #ffe4e6; color: #be123c; }
+      .marcador.alerta  { background: #fef3c7; color: #b45309; }
+      @keyframes marcador {
+        from { opacity: 0; transform: translateY(4px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+
+      /* ── Botões ───────────────────────────────────────────────────── */
+      .acoes { display: flex; gap: 10px; padding: 8px 16px 14px; }
+      .acoes button {
+        flex: 1; border: 0; border-radius: 11px; padding: 10px 8px;
+        font-size: 13px; font-weight: 700; cursor: pointer;
+        transition: transform .12s ease, box-shadow .15s ease, filter .15s ease, background .15s ease;
+      }
+      .acoes button:active { transform: scale(.96); }
+      .acao-primaria {
+        background: #4f46e5; color: #fff;
+        box-shadow: 0 6px 14px rgba(79, 70, 229, .28);
+      }
+      .acao-primaria:hover {
+        filter: brightness(1.08);
+        box-shadow: 0 8px 18px rgba(79, 70, 229, .36);
+      }
+      .acao-secundaria {
+        background: #f1f5f9; color: #475569;
+        border: 1px solid #e2e8f0;
+      }
+      .acao-secundaria:hover { background: #e2e8f0; }
+    </style>
+  </head>
+  <body>
+    <div class="janela">
+      <button class="fechar" id="btnFechar" title="Fechar (Esc)">✕</button>
+
+      <div class="topo vencida" id="topo">
+        <span class="icone">
+          <!-- Alerta (férias vencidas) -->
+          <svg class="alerta" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
+          </svg>
+          <!-- Sino (férias a vencer) -->
+          <svg class="sino" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+            <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+          </svg>
+        </span>
+        <span class="titulo-linha">
+          <span class="titulo" id="titulo">SCD</span>
+          <span class="subtitulo">Notificação do sistema</span>
+        </span>
+      </div>
+
+      <div class="corpo" id="corpo">
+        <span class="marcador vencida" id="marcador">Atenção</span>
+        <span class="mensagem carregando" id="mensagem">Carregando…</span>
+      </div>
+
+      <div class="acoes">
+        <button class="acao-secundaria" id="btnLembrar">Lembrar mais tarde</button>
+        <button class="acao-primaria" id="btnAcao">Regularizar agora</button>
+      </div>
+    </div>
+
+    <script type="module" src="/src/notificacao.ts"></script>
+  </body>
+</html>
