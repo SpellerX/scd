@@ -1,0 +1,67 @@
+# Publica uma Release estável (não-beta) do SCD a cada tag v* e alimenta o
+# auto-updater do app (gera o instalador + assinatura + latest.json).
+#
+# Como usar:
+#   1) Uma vez: crie os secrets do repositório (Settings → Secrets and
+#      variables → Actions):
+#        - TAURI_SIGNING_PRIVATE_KEY        (conteúdo do arquivo scd-updater.key)
+#        - TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+#   2) Para cada versão: defina a versão em package.json/Cargo.toml/tauri.conf.json
+#      e crie a tag:  git tag v0.1.1 && git push origin v0.1.1
+#
+# O app instalado verifica https://github.com/SpellerX/scd/releases/latest/
+# download/latest.json e se atualiza sozinho a partir desta primeira release.
+
+name: "release"
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag a publicar (ex.: v0.1.1)"
+        required: false
+
+jobs:
+  criar-release:
+    permissions:
+      contents: write
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Instala dependências do frontend
+        run: npm ci
+
+      # Compila em modo release, gera instalador + .sig e cria/publica a
+      # release (não-draft, não-prerelease) com latest.json para o updater.
+      - name: Build e publicação da release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ inputs.tag || github.ref_name }}
+          releaseName: "SCD ${{ inputs.tag || github.ref_name }}"
+          releaseBody: |
+            **SCD — Sistema de Controle de Demandas**
+
+            Instalador Windows (x64): baixe o arquivo `scd_..._x64-setup.exe`
+            desta release (ou use o link único sempre atualizado:
+            https://github.com/SpellerX/scd/releases/latest).
+
+            > Instalações já existentes recebem esta versão automaticamente
+            > pelo atualizador interno do app.
+          releaseDraft: false
+          prerelease: false

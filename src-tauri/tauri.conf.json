@@ -22,6 +22,17 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE4NkQyQTYzMkY4NUU4MEIKUldRTDZJVXZZeXB0cUxKOHJhc2xGWjIrMjJGYzhVY2VxeDluL3NPNkVYMXQxYm13L1F5aUJCcEkK",
+      "endpoints": [
+        "https://github.com/SpellerX/scd/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",

@@ -8,15 +8,22 @@
 import { onMounted, watch } from "vue";
 import { useAuth } from "./composables/useAuth";
 import { usePermissoes } from "./composables/usePermissoes";
+import { useAtualizacao } from "./composables/useAtualizacao";
 import LoginView from "./views/LoginView.vue";
 import DashboardView from "./views/DashboardView.vue";
 
 const { isAuthenticated, verificandoSessao, restoreSession, currentUser } = useAuth();
 const { carregar: carregarPermissoes } = usePermissoes();
+const { verificarEAtualizar } = useAtualizacao();
 
 // Ao abrir o app, confere se há uma sessão salva ("Manter-me conectado").
 onMounted(() => {
   void restoreSession();
+  // Checa atualizações depois que a interface estabiliza (3 s) — falhas
+  // são silenciosas e nunca atrapalham o uso.
+  window.setTimeout(() => {
+    void verificarEAtualizar();
+  }, 3_000);
 });
 
 // Sempre que o usuário muda (login, restauração de sessão ou logout),
