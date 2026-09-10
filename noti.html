@@ -42,6 +42,8 @@
       }
       .topo.vencida { background: linear-gradient(135deg, #f43f5e, #be123c); }
       .topo.alerta  { background: linear-gradient(135deg, #f59e0b, #b45309); }
+      /* Férias agendadas (alarme manual definido na tela) */
+      .topo.alarme  { background: linear-gradient(135deg, #6366f1, #4338ca); }
 
       /* Brilho que atravessa o topo de leve, de vez em quando */
       .topo::after {
@@ -69,9 +71,12 @@
       }
       .icone svg { width: 20px; height: 20px; }
       /* Mostra o ícone certo conforme o tipo do topo */
-      .icone svg.sino  { display: none; }
+      .icone svg.sino   { display: none; }
+      .icone svg.agenda { display: none; }
       .topo.alerta  .icone svg.sino   { display: block; }
       .topo.alerta  .icone svg.alerta { display: none; }
+      .topo.alarme  .icone svg.agenda { display: block; }
+      .topo.alarme  .icone svg.alerta { display: none; }
 
       .titulo-linha { min-width: 0; }
       .titulo { font-size: 14.5px; font-weight: 700; line-height: 1.2; letter-spacing: .1px; }
@@ -105,6 +110,7 @@
       }
       .marcador.vencida { background: #ffe4e6; color: #be123c; }
       .marcador.alerta  { background: #fef3c7; color: #b45309; }
+      .marcador.alarme  { background: #e0e7ff; color: #3730a3; }
       @keyframes marcador {
         from { opacity: 0; transform: translateY(4px); }
         to   { opacity: 1; transform: translateY(0); }
@@ -149,6 +155,11 @@
                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
             <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+          </svg>
+          <!-- Calendário (férias agendadas: alarme manual) -->
+          <svg class="agenda" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
           </svg>
         </span>
         <span class="titulo-linha">

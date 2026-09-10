@@ -1,12 +1,13 @@
 {
   "name": "scd",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
+    "test": "node --test --test-isolation=none \"src/**/*.test.ts\"",
     "tauri": "tauri"
   },
   "dependencies": {

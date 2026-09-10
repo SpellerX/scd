@@ -21,5 +21,8 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.tsx", "src/**/*.vue"],
+  /* Os testes (`npm test`) rodam no executor do Node, que não usa os tipos do
+     projeto (@types/node não é dependência) — por isso ficam fora do vue-tsc. */
+  "exclude": ["src/**/*.test.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

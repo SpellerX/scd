@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// Sino de notificações internas (férias vencidas e alertas a vencer).
-// Fica no cabeçalho; mostra um contador e a lista ao clicar.
+// Sino de notificações internas (férias vencidas, férias agendadas e alertas
+// de prazo a vencer). Fica no cabeçalho; mostra um contador e a lista ao clicar.
 import { onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useNotificacoes } from "../../composables/useNotificacoes";
@@ -92,11 +92,17 @@ onUnmounted(() => {
                 :class="
                   notificacao.tipo === 'vencida'
                     ? 'bg-red-100 text-red-600 dark:bg-red-950 dark:text-red-400'
-                    : 'bg-amber-100 text-amber-600 dark:bg-amber-950 dark:text-amber-400'
+                    : notificacao.tipo === 'alarme'
+                      ? 'bg-indigo-100 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-400'
+                      : 'bg-amber-100 text-amber-600 dark:bg-amber-950 dark:text-amber-400'
                 "
               >
                 <svg v-if="notificacao.tipo === 'vencida'" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="h-4 w-4">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
+                </svg>
+                <!-- Calendário: férias agendadas (alarme manual) -->
+                <svg v-else-if="notificacao.tipo === 'alarme'" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="h-4 w-4">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5" />
                 </svg>
                 <svg v-else xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="h-4 w-4">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />

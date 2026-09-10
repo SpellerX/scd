@@ -65,6 +65,11 @@ jobs:
         with:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: "SCD ${{ inputs.tag || github.ref_name }}"
+          # O updater JSON aponta para o MESMO tipo de instalador que o app
+          # recomenda na release (o setup.exe do NSIS). Com o padrão (false) e
+          # o bundle "all", o latest.json apontaria para o .msi — misturar NSIS
+          # com MSI na atualização dá problema de desinstalação/registro.
+          updaterJsonPreferNsis: true
           releaseBody: |
             **SCD — Sistema de Controle de Demandas**
 

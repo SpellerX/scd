@@ -44,6 +44,40 @@ pub fn regularizar_ferias(
     ferias::regularizar(&db, &id, observacao)
 }
 
+/// Comando `listar_periodos_funcionario` — períodos que ainda podem receber
+/// um alarme manual (a vencer e não regularizados). Alimenta o seletor de
+/// período da tela "Férias a vencer".
+#[tauri::command]
+pub fn listar_periodos_funcionario(
+    state: State<'_, AppState>,
+    funcionario_id: String,
+) -> Result<Vec<ferias::PeriodoDoFuncionario>, String> {
+    let db = state.db.lock().unwrap();
+    ferias::listar_periodos_do_funcionario(&db, &funcionario_id)
+}
+
+/// Comando `definir_alarme_ferias` — agenda o aviso de um período: escolha do
+/// funcionário/período + data do aviso (e observação livre), usado quando a
+/// empresa já marcou as férias e não quer esperar o alerta automático.
+#[tauri::command]
+pub fn definir_alarme_ferias(
+    state: State<'_, AppState>,
+    periodo_id: String,
+    alarme_em: String,
+    observacao: Option<String>,
+) -> Result<(), String> {
+    let db = state.db.lock().unwrap();
+    ferias::definir_alarme(&db, &periodo_id, &alarme_em, observacao)
+}
+
+/// Comando `remover_alarme_ferias` — desfaz o agendamento do período (o
+/// alerta automático volta a valer normalmente).
+#[tauri::command]
+pub fn remover_alarme_ferias(state: State<'_, AppState>, periodo_id: String) -> Result<(), String> {
+    let db = state.db.lock().unwrap();
+    ferias::remover_alarme(&db, &periodo_id)
+}
+
 /// Comando `obter_alerta_ferias` — dias de antecedência do alerta.
 #[tauri::command]
 pub fn obter_alerta_ferias(state: State<'_, AppState>) -> Result<i64, String> {

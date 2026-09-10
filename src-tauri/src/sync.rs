@@ -707,7 +707,8 @@ fn payload_do_registro(
         ),
         "employee_leave_periods" => conn.query_row(
             "SELECT employee_id, inicio, vencimento, regularizada,
-                        regularizada_em, observacao, deleted_at
+                        regularizada_em, observacao, alarme_em, alarme_observacao,
+                        deleted_at
                    FROM employee_leave_periods WHERE id = ?1",
             [id],
             |l| {
@@ -719,7 +720,10 @@ fn payload_do_registro(
                     "regularizada": l.get::<_, i64>(3)? != 0,
                     "regularizada_em": l.get::<_, Option<String>>(4)?,
                     "observacao": l.get::<_, Option<String>>(5)?,
-                    "deleted_at": l.get::<_, Option<String>>(6)?,
+                    // Alarme manual (férias agendadas pela empresa).
+                    "alarme_em": l.get::<_, Option<String>>(6)?,
+                    "alarme_observacao": l.get::<_, Option<String>>(7)?,
+                    "deleted_at": l.get::<_, Option<String>>(8)?,
                 }))
             },
         ),
@@ -1063,8 +1067,9 @@ fn aplicar_registro_remoto(
                 conn.execute(
                     "INSERT INTO employee_leave_periods
                         (id, employee_id, inicio, vencimento, regularizada,
-                         regularizada_em, observacao, created_at, updated_at, deleted_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                         regularizada_em, observacao, alarme_em, alarme_observacao,
+                         created_at, updated_at, deleted_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                     params![
                         id,
                         employee_id,
@@ -1076,6 +1081,8 @@ fn aplicar_registro_remoto(
                             .unwrap_or(false) as i64,
                         campo_str(registro, "regularizada_em"),
                         campo_str(registro, "observacao"),
+                        campo_str(registro, "alarme_em"),
+                        campo_str(registro, "alarme_observacao"),
                         remoto_criado,
                         remoto_ts,
                         remoto_deletado,
@@ -1089,8 +1096,9 @@ fn aplicar_registro_remoto(
                     conn.execute(
                         "UPDATE employee_leave_periods
                             SET regularizada = ?1, regularizada_em = ?2, observacao = ?3,
-                                deleted_at = ?4, updated_at = ?5
-                          WHERE id = ?6",
+                                alarme_em = ?4, alarme_observacao = ?5,
+                                deleted_at = ?6, updated_at = ?7
+                          WHERE id = ?8",
                         params![
                             registro
                                 .get("regularizada")
@@ -1098,6 +1106,8 @@ fn aplicar_registro_remoto(
                                 .unwrap_or(false) as i64,
                             campo_str(registro, "regularizada_em"),
                             campo_str(registro, "observacao"),
+                            campo_str(registro, "alarme_em"),
+                            campo_str(registro, "alarme_observacao"),
                             remoto_deletado,
                             remoto_ts,
                             id,
@@ -1308,6 +1318,11 @@ mod testes {
             assert_eq!(funcionario["empresa_id"], EMPRESA_ID);
             let periodo = payload_do_registro(&conn, "employee_leave_periods", PERIODO_ID).unwrap();
             assert_eq!(periodo["regularizada"], serde_json::Value::Bool(false));
+            assert_eq!(
+                periodo["alarme_em"],
+                serde_json::Value::Null,
+                "o período sincronizado deve levar o alarme manual (nulo quando não há)"
+            );
         }
 
         // Após soft delete, o registro é detectado como apagado e continua
@@ -1327,6 +1342,179 @@ mod testes {
         );
 
         let _ = std::fs::remove_file(&caminho);
+    }
+
+    /// Acrescenta os carimbos que a nuvem devolve (o payload local não os tem).
+    fn com_timestamps(payload: serde_json::Value, ts: &str) -> serde_json::Map<String, serde_json::Value> {
+        let mut mapa = payload.as_object().cloned().unwrap_or_default();
+        mapa.insert("created_at".to_string(), serde_json::json!(ts));
+        mapa.insert("updated_at".to_string(), serde_json::json!(ts));
+        mapa
+    }
+
+    #[test]
+    fn alarme_de_ferias_viaja_na_sincronizacao() {
+        const EMPRESA_ID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        const FUNC_ID: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+        const PERIODO_ID: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+
+        /// Banco com empresa + funcionário (o período chega pela sincronização).
+        fn banco_base(nome: &str) -> (std::sync::Mutex<Connection>, std::path::PathBuf) {
+            let caminho = std::env::temp_dir().join(format!(
+                "scd-sync-alarme-{nome}-{}.db",
+                std::process::id()
+            ));
+            let conn = crate::db::open(&caminho).expect("abrir banco de teste falhou");
+            conn.execute(
+                "INSERT INTO companies (id, cnpj, razao_social) VALUES (?1, '12345678000199', 'Teste')",
+                [EMPRESA_ID],
+            )
+            .expect("inserir empresa falhou");
+            conn.execute(
+                "INSERT INTO employees (id, nome, cpf, data_admissao, empresa_id)
+                 VALUES (?1, 'Fulano', NULL, '2024-05-01', ?2)",
+                rusqlite::params![FUNC_ID, EMPRESA_ID],
+            )
+            .expect("inserir funcionário falhou");
+            (Mutex::new(conn), caminho)
+        }
+
+        // ── Origem: período agendado (alarme manual) ────────────────────────
+        let (origem, caminho_origem) = banco_base("origem");
+
+        // Datas RELATIVAS a hoje (via SQLite): o alarme nunca pode estar no
+        // passado — assim o teste segue válido em qualquer data.
+        let (aviso, vencimento) = {
+            let conn = origem.lock().unwrap();
+            conn.query_row(
+                "SELECT date('now','localtime','+30 days'), date('now','localtime','+18 months')",
+                [],
+                |l| Ok((l.get::<_, String>(0)?, l.get::<_, String>(1)?)),
+            )
+            .expect("calcular datas do teste falhou")
+        };
+
+        {
+            let conn = origem.lock().unwrap();
+            conn.execute(
+                "INSERT INTO employee_leave_periods (id, employee_id, inicio, vencimento)
+                 VALUES (?1, ?2, '2024-05-01', ?3)",
+                rusqlite::params![PERIODO_ID, FUNC_ID, vencimento],
+            )
+            .expect("inserir período falhou");
+            crate::ferias::definir_alarme(
+                &conn,
+                PERIODO_ID,
+                &aviso,
+                Some("gozo de 10/03 a 05/04".to_string()),
+            )
+            .expect("definir alarme falhou");
+        }
+
+        // O alarme entra na lista do que precisa ser enviado (updated_at mudou).
+        assert!(
+            linhas_locais_alteradas(&origem, "employee_leave_periods", "")
+                .unwrap()
+                .contains(&PERIODO_ID.to_string()),
+            "o período com alarme deve ser enviado na sincronização"
+        );
+
+        let payload = {
+            let conn = origem.lock().unwrap();
+            payload_do_registro(&conn, "employee_leave_periods", PERIODO_ID).unwrap()
+        };
+        assert_eq!(payload["alarme_em"], serde_json::json!(aviso));
+        assert_eq!(
+            payload["alarme_observacao"],
+            serde_json::json!("gozo de 10/03 a 05/04")
+        );
+
+        // ── Destino: recebe o mesmo registro pela nuvem ─────────────────────
+        let (destino, caminho_destino) = banco_base("destino");
+        let mut avisos = Vec::new();
+        let aplicado = aplicar_registro_remoto(
+            &destino,
+            "employee_leave_periods",
+            &serde_json::Value::Object(com_timestamps(payload, "2026-02-01T10:00:00Z")),
+            &mut avisos,
+        )
+        .unwrap();
+        assert!(aplicado, "registro deveria ser aplicado; avisos: {avisos:?}");
+        assert!(avisos.is_empty(), "sem avisos inesperados: {avisos:?}");
+
+        let ler_alarme = |db: &std::sync::Mutex<Connection>| -> (Option<String>, Option<String>) {
+            let conn = db.lock().unwrap();
+            conn.query_row(
+                "SELECT alarme_em, alarme_observacao FROM employee_leave_periods WHERE id = ?1",
+                [PERIODO_ID],
+                |l| Ok((l.get(0)?, l.get(1)?)),
+            )
+            .expect("período não chegou ao banco de destino")
+        };
+
+        let (alarme, observacao) = ler_alarme(&destino);
+        assert_eq!(alarme.as_deref(), Some(aviso.as_str()));
+        assert_eq!(observacao.as_deref(), Some("gozo de 10/03 a 05/04"));
+
+        // ── Registro remoto MAIS ANTIGO não sobrescreve o alarme local ──────
+        {
+            let conn = destino.lock().unwrap();
+            conn.execute(
+                "UPDATE employee_leave_periods
+                    SET alarme_em = '2026-04-20', updated_at = '2026-06-01 10:00:00'
+                  WHERE id = ?1",
+                [PERIODO_ID],
+            )
+            .unwrap();
+        }
+        let mut antigo = com_timestamps(
+            {
+                let conn = origem.lock().unwrap();
+                payload_do_registro(&conn, "employee_leave_periods", PERIODO_ID).unwrap()
+            },
+            "2026-02-01T10:00:00Z", // anterior ao local de 01/06
+        );
+        antigo.insert("alarme_em".to_string(), serde_json::json!(aviso));
+        let aplicado = aplicar_registro_remoto(
+            &destino,
+            "employee_leave_periods",
+            &serde_json::Value::Object(antigo),
+            &mut avisos,
+        )
+        .unwrap();
+        assert!(!aplicado, "registro antigo não pode vencer o local");
+        assert_eq!(
+            ler_alarme(&destino).0.as_deref(),
+            Some("2026-04-20"),
+            "last-write-wins: o alarme local mais novo deve permanecer"
+        );
+
+        // ── Remoção do alarme na nuvem (mais nova) limpa o local ────────────
+        let mut sem_alarme = com_timestamps(
+            {
+                let conn = origem.lock().unwrap();
+                payload_do_registro(&conn, "employee_leave_periods", PERIODO_ID).unwrap()
+            },
+            "2026-07-01T10:00:00Z",
+        );
+        sem_alarme.insert("alarme_em".to_string(), serde_json::Value::Null);
+        sem_alarme.insert("alarme_observacao".to_string(), serde_json::Value::Null);
+        let aplicado = aplicar_registro_remoto(
+            &destino,
+            "employee_leave_periods",
+            &serde_json::Value::Object(sem_alarme),
+            &mut avisos,
+        )
+        .unwrap();
+        assert!(aplicado, "registro mais novo deveria ser aplicado");
+        assert_eq!(
+            ler_alarme(&destino),
+            (None, None),
+            "alarme removido em outra máquina deve sumir aqui também"
+        );
+
+        let _ = std::fs::remove_file(&caminho_origem);
+        let _ = std::fs::remove_file(&caminho_destino);
     }
 
     /// Prova de ponta a ponta do motor REAL contra a nuvem (requer o arquivo

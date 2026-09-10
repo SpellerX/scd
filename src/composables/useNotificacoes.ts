@@ -3,7 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 
 /**
  * Notificações internas do app (sino no cabeçalho).
- * São derivadas das férias: períodos VENCIDOS e alertas de períodos
+ * São derivadas das férias: períodos VENCIDOS, FÉRIAS AGENDADAS (alarme manual
+ * definido na tela "Férias a vencer") e alertas automáticos de períodos
  * prestes a vencer (dentro dos dias configurados).
  *
  * As notificações voltam a aparecer enquanto a pendência existir; o botão
@@ -11,7 +12,7 @@ import { invoke } from "@tauri-apps/api/core";
  */
 export interface Notificacao {
   id: string;
-  tipo: "vencida" | "alerta";
+  tipo: "vencida" | "alarme" | "alerta";
   titulo: string;
   mensagem: string;
 }

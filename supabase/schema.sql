@@ -80,18 +80,29 @@ create unique index if not exists employees_cpf_ativo
 
 -- ── Tabela: employee_leave_periods ─────────────────────────────────────────
 create table if not exists public.employee_leave_periods (
-    id               uuid        primary key default gen_random_uuid(),
-    employee_id      uuid        not null references public.employees(id) on delete cascade,
-    inicio           date        not null,
-    vencimento       date        not null,
-    regularizada     boolean     not null default false,
-    regularizada_em  timestamptz,
-    observacao       text,
-    created_at       timestamptz not null default now(),
-    updated_at       timestamptz not null default now(),
-    deleted_at       timestamptz,
-    owner_id         uuid        not null default auth.uid()
+    id                uuid        primary key default gen_random_uuid(),
+    employee_id       uuid        not null references public.employees(id) on delete cascade,
+    inicio            date        not null,
+    vencimento        date        not null,
+    regularizada      boolean     not null default false,
+    regularizada_em   timestamptz,
+    observacao        text,
+    -- Alarme manual: data do aviso escolhida quando a empresa já agendou as
+    -- férias (o período aparece em "Férias a vencer" antes da janela
+    -- automática de 12 meses) + texto livre do agendamento.
+    alarme_em         date,
+    alarme_observacao text,
+    created_at        timestamptz not null default now(),
+    updated_at        timestamptz not null default now(),
+    deleted_at        timestamptz,
+    owner_id          uuid        not null default auth.uid()
 );
+
+-- Bancos já criados antes do alarme manual: acrescenta as colunas (idempotente).
+alter table public.employee_leave_periods
+    add column if not exists alarme_em date;
+alter table public.employee_leave_periods
+    add column if not exists alarme_observacao text;
 
 drop trigger if exists employee_leave_periods_updated_at on public.employee_leave_periods;
 create trigger employee_leave_periods_updated_at

@@ -17,7 +17,12 @@
 //!   `updated_at` e `deleted_at` (soft delete) — base da sincronização com a
 //!   nuvem (Supabase);
 //! - `3` = `users` ganhou `updated_at` e `deleted_at` (soft delete) — usuários
-//!   e acessos passam a ser sincronizados pela nuvem (mantendo o login local).
+//!   e acessos passam a ser sincronizados pela nuvem (mantendo o login local);
+//! - `4` = `employee_leave_periods` ganhou `alarme_em` e `alarme_observacao` —
+//!   o **alarme manual** ("agendar as férias"): quando a empresa já marcou as
+//!   férias, o período entra em *Férias a vencer* e avisa na data escolhida,
+//!   sem esperar o alerta automático (que só começa 12 meses antes do
+//!   vencimento).
 //!
 //! A cada inicialização o app confere a versão gravada e aplica, em ordem,
 //! apenas as migrações em falta. Isso substitui o antigo "adivinhar pelo
@@ -44,7 +49,7 @@ use uuid::Uuid;
 /// 2. atualizar esta constante;
 /// 3. manter `init_schema()` criando o esquema FINAL (bancos novos já
 ///    nascem na última versão, sem passar pelas migrações).
-pub const VERSAO_ATUAL: i64 = 3;
+pub const VERSAO_ATUAL: i64 = 4;
 
 /// Abre (ou cria) o banco no caminho informado e leva o esquema à versão atual.
 pub fn open(path: &Path) -> Result<Connection, String> {
@@ -155,17 +160,24 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
         --   vencimento = fim do prazo concessivo (inicio + 24 meses) —
         --                após essa data o período fica VENCIDO.
         -- Regularizada = o funcionário já gozou/quitou aquele período.
+        -- Alarme manual (opcional): data em que o app deve avisar, escolhida
+        -- na tela Férias a vencer quando a empresa JÁ agendou as férias —
+        -- evita esperar o alerta automático (que só começa 12 meses antes do
+        -- vencimento). `alarme_observacao` é o texto livre do agendamento
+        -- (separado de `observacao`, usada na regularização).
         CREATE TABLE IF NOT EXISTS employee_leave_periods (
-            id               TEXT    NOT NULL PRIMARY KEY,
-            employee_id      TEXT    NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-            inicio           TEXT    NOT NULL,
-            vencimento       TEXT    NOT NULL,
-            regularizada     INTEGER NOT NULL DEFAULT 0,
-            regularizada_em  TEXT,
-            observacao       TEXT,
-            created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
-            updated_at       TEXT    NOT NULL DEFAULT (datetime('now')),
-            deleted_at       TEXT
+            id                TEXT    NOT NULL PRIMARY KEY,
+            employee_id       TEXT    NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+            inicio            TEXT    NOT NULL,
+            vencimento        TEXT    NOT NULL,
+            regularizada      INTEGER NOT NULL DEFAULT 0,
+            regularizada_em   TEXT,
+            observacao        TEXT,
+            alarme_em         TEXT,
+            alarme_observacao TEXT,
+            created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+            updated_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+            deleted_at        TEXT
         );
 
         -- Configurações gerais (chave → valor).
@@ -262,8 +274,29 @@ fn migracao_para(conn: &mut Connection, versao: i64) -> Result<(), String> {
         // passam a ser sincronizados pela nuvem (soft delete preserva o login
         // local/offline).
         3 => migracao_v3(conn),
+        // v3 → v4: períodos de férias ganham o alarme manual (agendamento).
+        4 => migracao_v4(conn),
         _ => Err(format!("Migração para a versão {versao} não implementada.")),
     }
+}
+
+/// v3 → v4: `employee_leave_periods` ganha `alarme_em` e
+/// `alarme_observacao` — o alarme manual de "férias agendadas".
+///
+/// Só acrescenta colunas (nenhum dado existente é reescrito), então cada
+/// coluna é adicionada individualmente e a migração é idempotente: um banco
+/// já normalizado à mão apenas registra a versão.
+fn migracao_v4(conn: &mut Connection) -> Result<(), String> {
+    for coluna in ["alarme_em", "alarme_observacao"] {
+        if tabela_tem_coluna(conn, "employee_leave_periods", coluna)? {
+            continue; // já no formato v4 (banco novo ou normalizado à mão)
+        }
+        conn.execute_batch(&format!(
+            "ALTER TABLE employee_leave_periods ADD COLUMN {coluna} TEXT;"
+        ))
+        .map_err(|err| format!("Falha ao acrescentar a coluna {coluna} (v4): {err}"))?;
+    }
+    Ok(())
 }
 
 /// v2 → v3: `users` ganha `updated_at`/`deleted_at` (soft delete) para os
@@ -738,6 +771,10 @@ mod testes {
             tabela_tem_coluna(&conn, "users", "deleted_at").unwrap(),
             "usuários devem nascer com soft delete (v3)"
         );
+        assert!(
+            tabela_tem_coluna(&conn, "employee_leave_periods", "alarme_em").unwrap(),
+            "períodos devem nascer com o alarme manual (v4)"
+        );
 
         // Empresa nasce com id UUID (TEXT) informado — como faz o domínio.
         let id = uuid_de_nome("teste/banco-novo");
@@ -950,6 +987,68 @@ mod testes {
     }
 
     #[test]
+    fn banco_v3_ganha_as_colunas_do_alarme_sem_perder_periodos() {
+        let caminho = caminho_temporario("v3-alarme");
+        let conn = open(&caminho).expect("abrir banco falhou");
+
+        // Simula um banco v3: recria `employee_leave_periods` no formato
+        // anterior (sem as colunas do alarme) com um período já cadastrado.
+        conn.execute_batch(
+            "INSERT INTO companies (id, cnpj, razao_social)
+                 VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '12345678000199', 'Empresa');
+             INSERT INTO employees (id, nome, cpf, data_admissao, empresa_id)
+                 VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'Fulano', NULL, '2024-05-01',
+                         'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+
+             DROP TABLE employee_leave_periods;
+             CREATE TABLE employee_leave_periods (
+                 id               TEXT    NOT NULL PRIMARY KEY,
+                 employee_id      TEXT    NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+                 inicio           TEXT    NOT NULL,
+                 vencimento       TEXT    NOT NULL,
+                 regularizada     INTEGER NOT NULL DEFAULT 0,
+                 regularizada_em  TEXT,
+                 observacao       TEXT,
+                 created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+                 updated_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+                 deleted_at       TEXT
+             );
+             INSERT INTO employee_leave_periods (id, employee_id, inicio, vencimento, observacao)
+                 VALUES ('cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+                         'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', '2024-05-01', '2026-05-01',
+                         'período antigo');
+             PRAGMA user_version = 3;",
+        )
+        .expect("montar banco v3 falhou");
+        drop(conn);
+
+        // `open` migra 3 → 4 acrescentando as colunas do alarme.
+        let conn = open(&caminho).expect("migração v4 falhou");
+        assert_eq!(versao_do_banco(&conn).unwrap(), VERSAO_ATUAL);
+        assert!(tabela_tem_coluna(&conn, "employee_leave_periods", "alarme_em").unwrap());
+        assert!(tabela_tem_coluna(&conn, "employee_leave_periods", "alarme_observacao").unwrap());
+
+        let (total, observacao, alarme): (i64, String, Option<String>) = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM employee_leave_periods), observacao, alarme_em
+                   FROM employee_leave_periods LIMIT 1",
+                [],
+                |l| Ok((l.get(0)?, l.get(1)?, l.get(2)?)),
+            )
+            .expect("período antigo sumiu na migração");
+        assert_eq!(total, 1, "a migração não pode perder períodos");
+        assert_eq!(observacao, "período antigo", "observação deve ser preservada");
+        assert_eq!(alarme, None, "alarme nasce vazio");
+
+        // Reabrir não pode reexecutar a migração nem falhar.
+        drop(conn);
+        let conn = open(&caminho).expect("segunda abertura falhou");
+        assert_eq!(versao_do_banco(&conn).unwrap(), VERSAO_ATUAL);
+
+        remover(&caminho);
+    }
+
+    #[test]
     fn banco_legado_v0_cpf_obrigatorio_migra() {
         let caminho = caminho_temporario("legado-v0");
         let conn = Connection::open(&caminho).expect("criar banco legado falhou");
@@ -976,6 +1075,211 @@ mod testes {
         assert_eq!(nome, "Fulano");
         assert_eq!(cpf.as_deref(), Some("52998224725"));
 
+        remover(&caminho);
+    }
+
+    /// Prova de fogo com o banco REAL do usuário — **opt-in**, nunca roda por
+    /// padrão (o caminho é da máquina, não do repositório).
+    ///
+    /// Copia o arquivo `scd.db` para um temporário e verifica, sem tocar no
+    /// original, que a migração até a versão atual não perde nenhum registro e
+    /// que um período real consegue receber o alarme manual (mesmo caminho que
+    /// a tela "Férias a vencer" percorre).
+    ///
+    /// Como rodar (PowerShell):
+    ///   $env:SCD_BANCO_REAL = "$env:APPDATA\com.scd.app\scd.db"
+    ///   cargo test --lib banco_real -- --ignored --nocapture
+    #[test]
+    #[ignore = "usa o banco real do usuário (defina SCD_BANCO_REAL)"]
+    fn banco_real_do_usuario_migra_e_aceita_alarme() {
+        use rusqlite::OptionalExtension;
+
+        let origem = std::env::var("SCD_BANCO_REAL")
+            .expect("defina SCD_BANCO_REAL com o caminho do scd.db");
+        let caminho = caminho_temporario("copia-real");
+        std::fs::copy(&origem, &caminho).expect("copiar o banco real falhou");
+
+        // Contagens no banco ORIGINAL (versão antiga), lendo a cópia crua.
+        let contar = |conn: &Connection| -> (i64, i64, i64, i64) {
+            conn.query_row(
+                "SELECT (SELECT COUNT(*) FROM companies),
+                        (SELECT COUNT(*) FROM employees),
+                        (SELECT COUNT(*) FROM employee_leave_periods),
+                        (SELECT COUNT(*) FROM employee_leave_periods WHERE regularizada = 0)",
+                [],
+                |l| Ok((l.get(0)?, l.get(1)?, l.get(2)?, l.get(3)?)),
+            )
+            .expect("contar registros falhou")
+        };
+        let antes = contar(&Connection::open(&caminho).expect("abrir a cópia falhou"));
+        let versao_antes = versao_do_banco(&Connection::open(&caminho).unwrap()).unwrap();
+
+        // Migração de verdade (mesma função que o app roda ao abrir).
+        let conn = open(&caminho).expect("migração do banco real falhou");
+        assert_eq!(versao_do_banco(&conn).unwrap(), VERSAO_ATUAL);
+        assert!(tabela_tem_coluna(&conn, "employee_leave_periods", "alarme_em").unwrap());
+        assert!(tabela_tem_coluna(&conn, "employee_leave_periods", "alarme_observacao").unwrap());
+
+        let depois = contar(&conn);
+        assert_eq!(
+            (depois.0, depois.1, depois.2, depois.3),
+            (antes.0, antes.1, antes.2, antes.3),
+            "a migração não pode perder nem duplicar registros"
+        );
+        println!(
+            "banco real: v{versao_antes} → v{} | {} empresas | {} funcionários | {} períodos ({} em aberto)",
+            VERSAO_ATUAL, depois.0, depois.1, depois.2, depois.3
+        );
+
+        // Diagnóstico: retrato dos funcionários reais (explica o que a tela mostra).
+        {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT f.nome, COALESCE(f.data_admissao, '—'), (f.deleted_at IS NOT NULL),
+                            (SELECT COUNT(*) FROM employee_leave_periods p
+                              WHERE p.employee_id = f.id AND p.deleted_at IS NULL),
+                            (SELECT COUNT(*) FROM employee_leave_periods p
+                              WHERE p.employee_id = f.id AND p.deleted_at IS NULL
+                                AND p.regularizada = 0
+                                AND p.vencimento > date('now','localtime'))
+                       FROM employees f
+                      ORDER BY f.nome",
+                )
+                .unwrap();
+            let linhas = stmt
+                .query_map([], |l| {
+                    Ok((
+                        l.get::<_, String>(0)?,
+                        l.get::<_, String>(1)?,
+                        l.get::<_, i64>(2)?,
+                        l.get::<_, i64>(3)?,
+                        l.get::<_, i64>(4)?,
+                    ))
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+
+            println!("funcionários no banco real ({}):", linhas.len());
+            for (nome, admissao, apagado, periodos, a_vencer) in &linhas {
+                println!(
+                    "  {nome} | admissão: {admissao} | {} | {periodos} período(s) ativo(s) | {a_vencer} a vencer",
+                    if *apagado != 0 { "APAGADO" } else { "ativo" }
+                );
+            }
+        }
+
+        // Um período real já a vencer, de funcionário ATIVO (caminho da tela).
+        let mut alvo: Option<(String, String, String)> = conn
+            .query_row(
+                "SELECT p.id, f.nome, p.vencimento
+                   FROM employee_leave_periods p
+                   JOIN employees f ON f.id = p.employee_id
+                  WHERE p.regularizada = 0
+                    AND p.vencimento > date('now','localtime')
+                    AND p.deleted_at IS NULL
+                    AND f.deleted_at IS NULL
+                  ORDER BY p.vencimento LIMIT 1",
+                [],
+                |l| Ok((l.get(0)?, l.get(1)?, l.get(2)?)),
+            )
+            .optional()
+            .expect("consultar períodos falhou");
+
+        // Nada a vencer no banco real? Cadastra um funcionário de teste NA CÓPIA
+        // (com 2 anos de casa, como o cadastro faz) para exercitar o fluxo
+        // inteiro: geração de períodos → agendamento → lista → notificação.
+        if alvo.is_none() {
+            let mut empresa: Option<String> = conn
+                .query_row(
+                    "SELECT id FROM companies WHERE deleted_at IS NULL ORDER BY razao_social LIMIT 1",
+                    [],
+                    |l| l.get(0),
+                )
+                .optional()
+                .expect("consultar empresas falhou");
+
+            // Banco sem empresa ativa (tudo apagado)? Cria uma NA CÓPIA, para o
+            // fluxo poder ser exercitado de ponta a ponta mesmo assim.
+            if empresa.is_none() {
+                let id = uuid::Uuid::new_v4().to_string();
+                conn.execute(
+                    "INSERT INTO companies (id, cnpj, razao_social)
+                     VALUES (?1, '00000000000000', 'Empresa Teste (cópia)')",
+                    [&id],
+                )
+                .expect("criar empresa de teste na cópia falhou");
+                println!("nenhuma empresa ativa: criada empresa de teste NA CÓPIA.");
+                empresa = Some(id);
+            }
+
+            if let Some(empresa_id) = empresa {
+                let admissao: String = conn
+                    .query_row("SELECT date('now','localtime','-2 years')", [], |l| l.get(0))
+                    .unwrap();
+                println!("nenhum período a vencer: criando funcionário de teste NA CÓPIA (admissão {admissao})");
+                let funcionario = crate::funcionarios::inserir(
+                    &conn,
+                    "Teste Automático (cópia)",
+                    "",
+                    &empresa_id,
+                    Some(admissao),
+                )
+                .expect("cadastrar funcionário de teste na cópia falhou");
+
+                alvo = conn
+                    .query_row(
+                        "SELECT p.id, f.nome, p.vencimento
+                           FROM employee_leave_periods p
+                           JOIN employees f ON f.id = p.employee_id
+                          WHERE p.employee_id = ?1
+                            AND p.regularizada = 0
+                            AND p.vencimento > date('now','localtime')
+                            AND p.deleted_at IS NULL
+                          ORDER BY p.vencimento LIMIT 1",
+                        [&funcionario.id],
+                        |l| Ok((l.get(0)?, l.get(1)?, l.get(2)?)),
+                    )
+                    .optional()
+                    .expect("consultar períodos do funcionário de teste falhou");
+            } else {
+                println!("banco real sem empresa ativa: não há como exercitar o cadastro.");
+            }
+        }
+
+        let Some((periodo_id, funcionario, vencimento)) = alvo else {
+            println!("fluxo de agendamento NÃO exercitado (sem funcionário/empresa utilizável).");
+            remover(&caminho);
+            return;
+        };
+
+        let hoje: String = conn
+            .query_row("SELECT date('now','localtime')", [], |l| l.get(0))
+            .unwrap();
+        crate::ferias::definir_alarme(&conn, &periodo_id, &hoje, Some("teste".into()))
+            .expect("agendar alarme em dados reais falhou");
+
+        let lista = crate::ferias::listar_a_vencer(&conn, 15).expect("listar falhou");
+        let item = lista
+            .iter()
+            .find(|i| i.id == periodo_id)
+            .expect("período agendado deveria aparecer em Férias a vencer");
+        assert!(item.agendado);
+        assert!(item.alarme_disparado, "aviso de hoje já deve estar pendente");
+
+        let avisos = crate::ferias::listar_notificacoes(&conn).expect("notificações falharam");
+        assert!(
+            avisos
+                .iter()
+                .any(|n| n.id == format!("g-{periodo_id}") && n.tipo == "alarme"),
+            "o aviso agendado deveria estar nas notificações: {avisos:?}"
+        );
+        println!(
+            "alarme OK em dados reais: {funcionario} (vencimento {vencimento}) → {} notificação(ões) de agendamento",
+            avisos.iter().filter(|n| n.tipo == "alarme").count()
+        );
+
+        // A cópia é descartada: o banco real permanece intacto.
         remover(&caminho);
     }
 

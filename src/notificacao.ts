@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 interface Pendencia {
   id: string;
-  tipo: "vencida" | "alerta" | string;
+  tipo: "vencida" | "alarme" | "alerta" | string;
   titulo: string;
   mensagem: string;
   secao: string;
@@ -19,16 +19,29 @@ function fechar() {
   void invoke("fechar_janela_notificacao").catch(() => window.close());
 }
 
+/** Estilo do cabeçalho conforme o tipo: vencida | alarme (agendado) | alerta. */
+function estiloDoTipo(tipo: string): string {
+  if (tipo === "vencida") return "vencida";
+  if (tipo === "alarme") return "alarme";
+  return "alerta";
+}
+
 function renderizar(pendencia: Pendencia) {
+  const estilo = estiloDoTipo(pendencia.tipo);
+
   const topo = elemento("topo");
-  topo.className = "topo " + (pendencia.tipo === "vencida" ? "vencida" : "alerta");
+  topo.className = "topo " + estilo;
   elemento("titulo").textContent = pendencia.titulo || "SCD";
 
   // Marcador colorido conforme o tipo + mensagem.
   const marcador = elemento("marcador");
-  marcador.className = "marcador " + (pendencia.tipo === "vencida" ? "vencida" : "alerta");
+  marcador.className = "marcador " + estilo;
   marcador.textContent =
-    pendencia.tipo === "vencida" ? "Férias vencidas" : "Aviso de prazo";
+    pendencia.tipo === "vencida"
+      ? "Férias vencidas"
+      : pendencia.tipo === "alarme"
+        ? "Férias agendadas"
+        : "Aviso de prazo";
 
   const mensagem = elemento("mensagem");
   mensagem.textContent = pendencia.mensagem || "";
