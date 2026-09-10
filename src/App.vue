@@ -9,16 +9,31 @@ import { onMounted, watch } from "vue";
 import { useAuth } from "./composables/useAuth";
 import { usePermissoes } from "./composables/usePermissoes";
 import { useAtualizacao } from "./composables/useAtualizacao";
+import { useSync } from "./composables/useSync";
 import LoginView from "./views/LoginView.vue";
 import DashboardView from "./views/DashboardView.vue";
 
 const { isAuthenticated, verificandoSessao, restoreSession, currentUser } = useAuth();
 const { carregar: carregarPermissoes } = usePermissoes();
 const { verificarEAtualizar } = useAtualizacao();
+const { verificarEExecutar: sincronizarComNuvem } = useSync();
 
 // Ao abrir o app, confere se há uma sessão salva ("Manter-me conectado").
 onMounted(() => {
   void restoreSession();
+
+  // Sincroniza ANTES do login: numa máquina nova é assim que os usuários
+  // cadastrados em outra máquina (e as empresas/funcionários) chegam — senão
+  // ninguém além do superusuário local conseguiria entrar.
+  void sincronizarComNuvem();
+  window.setTimeout(() => {
+    if (!isAuthenticated.value) void sincronizarComNuvem();
+  }, 15_000);
+  // Enquanto ninguém estiver logado, tenta de novo a cada minuto.
+  window.setInterval(() => {
+    if (!isAuthenticated.value) void sincronizarComNuvem();
+  }, 60_000);
+
   // Checa atualizações depois que a interface estabiliza (3 s) — falhas
   // são silenciosas e nunca atrapalham o uso.
   window.setTimeout(() => {

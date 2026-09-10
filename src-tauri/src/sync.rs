@@ -494,9 +494,20 @@ pub async fn sincronizar(
         let conn = db.lock().unwrap();
         ler_config(&conn, CHAVE_PULL_ATE)?.unwrap_or_default()
     };
+    // Mesma folga de 1 segundo do push: evita "perder" um registro gravado no
+    // mesmo segundo do marcador (reprocessar é inofensivo — LWW decide).
+    let pull_desde = if pull_ate.trim().is_empty() {
+        String::new()
+    } else {
+        let conn = db.lock().unwrap();
+        conn.query_row("SELECT datetime(?1, '-1 second')", [&pull_ate], |l| {
+            l.get(0)
+        })
+        .map_err(|err| format!("Falha ao calcular o limite de busca: {err}"))?
+    };
     let mut novo_pull_ate = pull_ate.clone();
     for tabela in TABELAS {
-        for remoto in puxar_deltas(http, &cfg, &access, &uid, tabela, &pull_ate).await? {
+        for remoto in puxar_deltas(http, &cfg, &access, &uid, tabela, &pull_desde).await? {
             match aplicar_registro_remoto(db, tabela, &remoto, &mut resumo.avisos) {
                 Ok(aplicado) => {
                     if aplicado {
@@ -540,12 +551,24 @@ pub async fn sincronizar(
 
 /// Ids (UUID) dos registros locais alterados desde o último envio.
 /// Inclui os apagados (soft delete também altera `updated_at`).
+///
+/// O marcador ganha **1 segundo de folga**: como as datas têm precisão de
+/// segundo, um registro gravado no mesmo segundo do último envio poderia
+/// ficar "invisível" para sempre (`updated_at > marcador` seria falso).
+/// Reenviar um registro no limite é inofensivo (upsert idempotente).
 fn linhas_locais_alteradas(
     db: &Mutex<Connection>,
     tabela: &str,
     desde: &str,
 ) -> Result<Vec<String>, String> {
     let conn = db.lock().unwrap();
+    let limite = if desde.trim().is_empty() {
+        String::new()
+    } else {
+        conn.query_row("SELECT datetime(?1, '-1 second')", [desde], |l| l.get(0))
+            .map_err(|err| format!("Falha ao calcular o limite de envio: {err}"))?
+    };
+
     let mut stmt = conn
         .prepare(&format!(
             "SELECT CAST(id AS TEXT) FROM {tabela} WHERE updated_at > ?1 ORDER BY updated_at"
@@ -553,7 +576,7 @@ fn linhas_locais_alteradas(
         .map_err(|err| format!("Falha ao preparar o envio de {tabela}: {err}"))?;
 
     let ids = stmt
-        .query_map([desde], |linha| linha.get(0))
+        .query_map([limite], |linha| linha.get(0))
         .map_err(|err| format!("Falha ao consultar alterações de {tabela}: {err}"))?
         .collect::<Result<Vec<String>, _>>()
         .map_err(|err| format!("Falha ao ler alterações de {tabela}: {err}"))?;
