@@ -266,17 +266,80 @@ fn migracao_para(conn: &mut Connection, versao: i64) -> Result<(), String> {
     }
 }
 
-/// v2 → v3: adiciona as colunas de sincronização na tabela `users`.
+/// v2 → v3: `users` ganha `updated_at`/`deleted_at` (soft delete) para os
+/// usuários serem sincronizados pela nuvem.
+///
+/// SQLite não permite `ADD COLUMN ... DEFAULT datetime('now')` (default não
+/// constante), então a tabela é recriada — mesmo padrão da migração v2 —
+/// preservando ids, dados e os vínculos de `sessions`/`user_permissions`.
 fn migracao_v3(conn: &mut Connection) -> Result<(), String> {
     if tabela_tem_coluna(conn, "users", "deleted_at")? {
         return Ok(()); // já no formato v3 (ex.: banco novo/normalizado)
     }
-    conn.execute_batch(
-        "ALTER TABLE users ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime('now'));
-         ALTER TABLE users ADD COLUMN deleted_at TEXT;",
-    )
-    .map_err(|err| format!("Falha ao migrar a tabela users (v3): {err}"))?;
-    Ok(())
+
+    // O rebuild troca tabelas que têm FK entre si; SQLite exige desligar a
+    // checagem de chaves estrangeiras FORA de uma transação para isso.
+    conn.execute_batch("PRAGMA foreign_keys = OFF;")
+        .map_err(|err| format!("Falha ao preparar a migração de usuários: {err}"))?;
+
+    let resultado = (|| -> Result<(), String> {
+        conn.execute_batch("BEGIN;")
+            .map_err(|err| format!("Falha ao iniciar a migração de usuários: {err}"))?;
+        conn.execute_batch(
+            "CREATE TABLE users_nova (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                username      TEXT    NOT NULL UNIQUE,
+                display_name  TEXT    NOT NULL,
+                password_hash TEXT    NOT NULL,
+                created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+                updated_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+                deleted_at    TEXT
+            );
+
+            INSERT INTO users_nova (id, username, display_name, password_hash, created_at)
+                SELECT id, username, display_name, password_hash, created_at FROM users;
+
+            -- Recria também os filhos (referenciam users por FK) para trocar a
+            -- tabela users; os dados são preservados (logins persistentes e
+            -- permissões continuam valendo).
+            CREATE TABLE sessions_nova (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL REFERENCES users(id),
+                token      TEXT    NOT NULL UNIQUE,
+                created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO sessions_nova (id, user_id, token, created_at)
+                SELECT id, user_id, token, created_at FROM sessions;
+
+            CREATE TABLE user_permissions_nova (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                section_id TEXT    NOT NULL,
+                UNIQUE (user_id, section_id)
+            );
+            INSERT INTO user_permissions_nova (id, user_id, section_id)
+                SELECT id, user_id, section_id FROM user_permissions;
+
+            DROP TABLE user_permissions;
+            DROP TABLE sessions;
+            DROP TABLE users;
+
+            ALTER TABLE users_nova RENAME TO users;
+            ALTER TABLE sessions_nova RENAME TO sessions;
+            ALTER TABLE user_permissions_nova RENAME TO user_permissions;
+
+            COMMIT;",
+        )
+        .map_err(|err| format!("Falha ao migrar a tabela users (v3): {err}"))?;
+        Ok(())
+    })();
+
+    if resultado.is_err() {
+        let _ = conn.execute_batch("ROLLBACK;");
+    }
+    conn.execute_batch("PRAGMA foreign_keys = ON;")
+        .map_err(|err| format!("Falha ao religar as chaves estrangeiras: {err}"))?;
+    resultado
 }
 
 /// A coluna `employees.cpf` ainda é NOT NULL (formato antigo)?
@@ -811,6 +874,79 @@ mod testes {
             ids[0], ids[1],
             "uuids devem ser determinísticos entre máquinas"
         );
+    }
+
+    #[test]
+    fn banco_legado_v2_com_usuarios_migra_v3_preservando_vinculos() {
+        let caminho = caminho_temporario("legado-users");
+        let mut conn = Connection::open(&caminho).expect("criar banco legado falhou");
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        // Formato v2: users SEM updated_at/deleted_at + filhos (FK).
+        conn.execute_batch(
+            "CREATE TABLE users (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                username      TEXT    NOT NULL UNIQUE,
+                display_name  TEXT    NOT NULL,
+                password_hash TEXT    NOT NULL,
+                created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE sessions (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL REFERENCES users(id),
+                token      TEXT    NOT NULL UNIQUE,
+                created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE user_permissions (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                section_id TEXT    NOT NULL,
+                UNIQUE (user_id, section_id)
+            );
+            INSERT INTO users (username, display_name, password_hash)
+                VALUES ('fernando', 'Fernando', 'hash');
+            INSERT INTO sessions (user_id, token) VALUES (1, 'token-teste');
+            INSERT INTO user_permissions (user_id, section_id) VALUES (1, 'cadastro-empresa');",
+        )
+        .expect("montar banco v2 falhou");
+        gravar_versao(&conn, 2).expect("gravar versão 2 falhou");
+        drop(conn);
+
+        // `open` migra 2 → 3 e não pode quebrar nada.
+        let conn = open(&caminho).expect("migração v3 falhou");
+        assert_eq!(versao_do_banco(&conn).unwrap(), VERSAO_ATUAL);
+        assert!(tabela_tem_coluna(&conn, "users", "deleted_at").unwrap());
+
+        let (nome, hash): (String, String) = conn
+            .query_row(
+                "SELECT display_name, password_hash FROM users WHERE username = 'fernando'",
+                [],
+                |l| Ok((l.get(0)?, l.get(1)?)),
+            )
+            .expect("usuário sumiu na migração");
+        assert_eq!(nome, "Fernando");
+        assert_eq!(hash, "hash");
+
+        // Vínculos preservados (sessão e permissão continuam apontando p/ ele).
+        let sessao: String = conn
+            .query_row(
+                "SELECT s.token FROM sessions s JOIN users u ON u.id = s.user_id
+                  WHERE s.token = 'token-teste' AND u.username = 'fernando'",
+                [],
+                |l| l.get(0),
+            )
+            .expect("sessão quebrada na migração");
+        assert_eq!(sessao, "token-teste");
+        let secao: String = conn
+            .query_row(
+                "SELECT p.section_id FROM user_permissions p JOIN users u ON u.id = p.user_id
+                  WHERE u.username = 'fernando'",
+                [],
+                |l| l.get(0),
+            )
+            .expect("permissão quebrada na migração");
+        assert_eq!(secao, "cadastro-empresa");
+
+        remover(&caminho);
     }
 
     #[test]
