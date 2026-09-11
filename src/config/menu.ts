@@ -93,3 +93,15 @@ export const topMenu: MenuGroup[] = [
     ],
   },
 ];
+
+/**
+ * Todas as seções, na ordem em que aparecem no menu — usado por quem precisa
+ * levar o usuário a uma seção (ex.: cards da tela inicial) sem depender da
+ * posição dela dentro do grupo.
+ */
+export const todasAsSecoes: MenuItem[] = topMenu.flatMap((grupo) => grupo.items);
+
+/** Seção pelo id (`undefined` quando o id não existe — ex.: menu renomeado). */
+export function secaoPorId(id: string): MenuItem | undefined {
+  return todasAsSecoes.find((item) => item.id === id);
+}

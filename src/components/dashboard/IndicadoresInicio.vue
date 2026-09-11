@@ -2,6 +2,11 @@
 // Indicadores da tela inicial (dashboard): centraliza os principais números
 // do sistema numa única visão, com cartões legíveis e acesso rápido.
 //
+// Cada cartão é CLICÁVEL e leva para a sua tela (Empresas, Funcionários,
+// Férias vencidas, Férias a vencer) — as regras e os destinos ficam em
+// `kpis.ts`, cobertos por testes (`npm test`). Quem não tem acesso à seção
+// vê o número, mas o cartão não navega (mesma regra do menu).
+//
 // Dados vêm dos estados compartilhados de useEmpresas/useFuncionarios
 // (carregados ao montar) — mesma fonte usada pelas telas de cadastro.
 import { computed, onMounted } from "vue";
@@ -9,7 +14,9 @@ import { useEmpresas } from "../../composables/useEmpresas";
 import { useFuncionarios } from "../../composables/useFuncionarios";
 import { useFerias } from "../../composables/useFerias";
 import { useNavigation } from "../../composables/useNavigation";
-import { topMenu } from "../../config/menu";
+import { usePermissoes } from "../../composables/usePermissoes";
+import { secaoPorId } from "../../config/menu";
+import { montarKpis, rotuloAcessivel, type Kpi } from "./kpis";
 import { formatarCnpj } from "../../utils/cnpj";
 import Icone from "../ui/Icone.vue";
 
@@ -17,6 +24,7 @@ const { empresas, listar: listarEmpresas, erroLista: erroEmpresas } = useEmpresa
 const { funcionarios, listar: listarFuncionarios, erroLista: erroFuncionarios } = useFuncionarios();
 const { vencidas, aVencer, carregar: carregarFerias, erro: erroFerias } = useFerias();
 const { openSection } = useNavigation();
+const { pode } = usePermissoes();
 
 onMounted(() => {
   void listarEmpresas();
@@ -61,60 +69,41 @@ const ultimasEmpresas = computed(() =>
     .slice(0, 6),
 );
 
-// ── Configuração dos cartões de KPI ────────────────────────────────────────
+// ── Cartões de KPI (valores + destino) ─────────────────────────────────────
 
-interface Kpi {
-  chave: string;
-  rotulo: string;
-  icone: "empresa" | "funcionario" | "ferias-vencidas" | "ferias-a-vencer";
-  valor: number;
-  nota: string;
-  cor: string; // classes de gradiente do azulejo
+const kpis = computed(() =>
+  montarKpis({
+    empresas: empresas.value.length,
+    funcionarios: funcionarios.value.length,
+    vencidas: vencidas.value.length,
+    aVencer: aVencer.value.length,
+    empresasNoMes: empresasNoMes.value,
+  }),
+);
+
+/** Nome da tela de destino do card (usado no título e no rótulo de acessibilidade). */
+function destino(kpi: Kpi): string {
+  return secaoPorId(kpi.secao)?.label ?? kpi.rotulo;
 }
 
-const kpis = computed<Kpi[]>(() => [
-  {
-    chave: "empresas",
-    rotulo: "Empresas",
-    icone: "empresa",
-    valor: empresas.value.length,
-    nota: `+${empresasNoMes.value} no mês`,
-    cor: "from-indigo-500 to-violet-600",
-  },
-  {
-    chave: "funcionarios",
-    rotulo: "Funcionários",
-    icone: "funcionario",
-    valor: funcionarios.value.length,
-    nota: "vinculados às empresas",
-    cor: "from-sky-500 to-indigo-600",
-  },
-  {
-    chave: "ferias-vencidas",
-    rotulo: "Férias vencidas",
-    icone: "ferias-vencidas",
-    valor: vencidas.value.length,
-    nota: vencidas.value.length > 0 ? "aguardando regularização" : "em dia",
-    cor: "from-amber-500 to-orange-600",
-  },
-  {
-    chave: "ferias-a-vencer",
-    rotulo: "Férias a vencer",
-    icone: "ferias-a-vencer",
-    valor: aVencer.value.length,
-    nota: aVencer.value.length > 0 ? "dentro do prazo" : "nenhum período",
-    cor: "from-emerald-500 to-teal-600",
-  },
-]);
+/** O usuário logado pode abrir esta seção? (mesma regra do menu) */
+function podeAbrir(kpi: Kpi): boolean {
+  return pode(kpi.secao);
+}
+
+/** Clique no cartão: abre a tela correspondente. */
+function abrir(kpi: Kpi) {
+  if (!podeAbrir(kpi)) return;
+  const secao = secaoPorId(kpi.secao);
+  if (secao) openSection(secao);
+}
 
 // ── Acesso rápido à seção de empresas ─────────────────────────────────────
 
-const secaoEmpresa = computed(() =>
-  topMenu.flatMap((g) => g.items).find((item) => item.id === "cadastro-empresa"),
-);
-
+/** Abre o cadastro de empresas (botão "Ver todas" e linhas da lista). */
 function abrirEmpresas() {
-  if (secaoEmpresa.value) openSection(secaoEmpresa.value);
+  const secao = secaoPorId("cadastro-empresa");
+  if (secao) openSection(secao);
 }
 
 const hoje = new Date().toLocaleDateString("pt-BR", {
@@ -141,20 +130,34 @@ const hoje = new Date().toLocaleDateString("pt-BR", {
       {{ erroDashboard }}
     </p>
 
-    <!-- Cartões de indicadores (KPIs) -->
+    <!-- Cartões de indicadores (KPIs): cada um abre a sua tela ao clicar -->
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      <div
+      <button
         v-for="kpi in kpis"
         :key="kpi.chave"
-        class="flex items-center gap-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm dark:border-neutral-700 dark:bg-neutral-800"
+        type="button"
+        :disabled="!podeAbrir(kpi)"
+        :title="podeAbrir(kpi) ? `Abrir ${destino(kpi)}` : undefined"
+        :aria-label="
+          podeAbrir(kpi)
+            ? rotuloAcessivel(kpi, destino(kpi))
+            : `${kpi.rotulo}: ${kpi.valor}. Sem acesso à tela ${destino(kpi)}`
+        "
+        class="group flex w-full items-center gap-4 rounded-2xl border border-neutral-200 bg-white p-5 text-left shadow-sm transition dark:border-neutral-700 dark:bg-neutral-800"
+        :class="
+          podeAbrir(kpi)
+            ? 'cursor-pointer hover:-translate-y-0.5 hover:border-indigo-300 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:hover:border-indigo-600'
+            : 'cursor-default'
+        "
+        @click="abrir(kpi)"
       >
         <span
-          class="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br text-white shadow-lg"
+          class="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br text-white shadow-lg transition group-hover:scale-105"
           :class="kpi.cor"
         >
           <Icone :nome="kpi.icone" tamanho="lg" />
         </span>
-        <span class="min-w-0">
+        <span class="min-w-0 flex-1">
           <span class="block text-2xl font-bold leading-tight tabular-nums">
             {{ kpi.valor }}
           </span>
@@ -173,7 +176,16 @@ const hoje = new Date().toLocaleDateString("pt-BR", {
             {{ kpi.nota }}
           </span>
         </span>
-      </div>
+
+        <!-- Seta: aparece no hover/foco, reforçando que o cartão é clicável -->
+        <span
+          v-if="podeAbrir(kpi)"
+          aria-hidden="true"
+          class="shrink-0 text-lg text-neutral-300 opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100 group-focus-visible:opacity-100 dark:text-neutral-500"
+        >
+          →
+        </span>
+      </button>
     </div>
 
     <!-- Últimas empresas cadastradas -->

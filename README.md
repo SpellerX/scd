@@ -16,7 +16,9 @@ Aplicativo desktop com **Tauri v2** (Rust) + **Vue 3** (TypeScript/Vite) + **Tai
 - **Dashboard com menu superior**: grupos **Cadastro** (Empresa,
   Funcionários, Férias vencidas, Férias a vencer) e **Sistema** (Usuários)
 - **Dashboard de indicadores** (tela inicial): totais de empresas,
-  funcionários, férias vencidas e a vencer + últimas empresas cadastradas
+  funcionários, férias vencidas e a vencer + últimas empresas cadastradas.
+  Cada cartão é **clicável e abre a tela correspondente** (quem não tem acesso
+  à seção vê o número, mas o cartão não navega — mesma regra do menu)
 - **Cadastro de Empresa**:
   - busca de dados públicos pelo CNPJ (**Minha Receita** — API aberta, sem
     limite prático de consultas; **BrasilAPI** entra como fallback);
@@ -305,7 +307,11 @@ dependências novas; usa `--test-isolation=none` para rodar tudo num processo):
 - cobre as funções puras de `src/utils/ferias.ts` — selo de prazo do alerta
   automático, selo do alarme ("aviso pendente"/"avisa em N dias"), rótulo do
   período no seletor e a validação do formulário de agendamento (que são
-  exatamente as regras usadas pelas telas).
+  exatamente as regras usadas pelas telas);
+- cobre os cartões da tela inicial (`src/components/dashboard/kpis.ts`) —
+  valores, notas e, principalmente, **para onde cada cartão leva**: o teste
+  falha se um destino apontar para uma seção que não existe no menu
+  (`src/config/menu.ts`), o que pegaria um id renomeado por engano.
 
 Os arquivos `*.test.ts` ficam fora do `vue-tsc` (veja `exclude` no
 `tsconfig.json`): o executor do Node não usa os tipos do projeto e
