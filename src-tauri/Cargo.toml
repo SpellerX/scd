@@ -1,6 +1,6 @@
 [package]
 name = "scd"
-version = "0.2.2"
+version = "0.2.3"
 description = "SCD — Sistema de Controle de Demandas"
 authors = ["you"]
 edition = "2021"
